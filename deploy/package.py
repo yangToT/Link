@@ -1,0 +1,20 @@
+"""Create release archives from an explicit allowlist; never package an instance directory."""
+import hashlib,json,pathlib,shutil,tarfile,zipfile
+root=pathlib.Path(__file__).resolve().parents[1];artifacts=root/'artifacts';release=artifacts/'release';release.mkdir(exist_ok=True)
+version='0.1.0-alpha.1'
+common=[root/'LICENSE',root/'THIRD-PARTY-NOTICES.md',root/'README.md',*sorted((root/'third_party').glob('*')),root/'docs/deployment.md',root/'docs/validation.md']
+def relative(p):return str(p.relative_to(root)).replace('\\','/')
+def zip_package(name,files):
+ with zipfile.ZipFile(release/name,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
+  for source,target in files:z.write(source,target)
+base=[(p,relative(p)) for p in common]
+zip_package('Link-client-windows-amd64-v'+version+'.zip',base+[(artifacts/'client-windows-amd64'/name,name) for name in ['Link.exe','netbird.exe','wintun.dll']]+[(root/'client/uninstall.ps1','uninstall.ps1')])
+zip_package('Link-server-windows-amd64-v'+version+'.zip',base+[(artifacts/'server-windows-amd64/LinkServer.exe','LinkServer.exe')])
+files=base+[(artifacts/'server-linux-amd64/link-server','link-server'),(artifacts/'vendor/netbird-server','vendor/netbird-server'),(artifacts/'vendor/linux/netbird','vendor/netbird'),(artifacts/'vendor/upstream.json','vendor/upstream.json'),(artifacts/'vendor/netbird-source-v0.79.0.tar.gz','vendor/netbird-source-v0.79.0.tar.gz'),(root/'deploy/install.sh','deploy/install.sh'),(root/'deploy/bootstrap.py','deploy/bootstrap.py')]
+with tarfile.open(release/('Link-server-linux-amd64-v'+version+'.tar.gz'),'w:gz') as archive:
+ for source,target in files:
+  info=archive.gettarinfo(str(source),arcname=target);info.uid=info.gid=0;info.uname=info.gname='';info.mode=0o755 if target in ['link-server','vendor/netbird','vendor/netbird-server','deploy/install.sh'] else 0o644
+  with source.open('rb') as stream:archive.addfile(info,stream)
+paths=sorted(p for p in release.iterdir() if p.suffix=='.zip' or p.name.endswith('.tar.gz'))
+(release/'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in paths),encoding='utf8')
+for p in paths:print(p.name+': '+str(p.stat().st_size)+' bytes')
