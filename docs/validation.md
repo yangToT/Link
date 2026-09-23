@@ -168,4 +168,6 @@ GitHub SSH 与 API 身份均已验证，公开仓库为 https://github.com/yangT
 - 本机真实 Windows 测试调用生产成员配置方法：临时签名网卡、账号创建、口令、服务器证书设置及启用、AccountDetailSet、AccountConnect 全部成功。连接云端独立测试 Hub，报告 `Connection Completed (Session Established)`、TCP 24448、UDP acceleration supported/active 均为 No。
 - 测试 Hub 未桥接办公网、未启用 NAT/DHCP。测试结束删除本机临时连接和网卡、云端临时 Hub；默认路由、DNS、网卡清单与测试前完全一致。
 - 完整 Windows 包构建、自测、WPF 操作反馈、网络保护脚本检查通过。家里设备 DHCP 取址、双方代理并行运行及真实跨网双向业务访问仍未验收。
-- 本版发布后执行 alpha.8 → alpha.9 更新验证，结果后续追加；上述成员连接测试不等于自动更新验收。
+- 发布后，安装目录中的 alpha.8 实际检测并下载 GitHub alpha.9 发布包，生产下载代码通过 HTTPS、SHA256SUMS 和 GitHub digest 校验。客户端自身的 Prepare/Apply/Watch 任务随后完成，受保护任务记录为 SUCCESS；worker 哈希匹配旧 alpha.8，payload 与安装目录哈希均匹配发布的 alpha.9，新窗口已启动。
+- 升级后真实后台报告 alpha.9 且已连接；固定证书公开健康接口、agent SSE、私有管理登录/状态/管理 SSE 检查均成功。发布提交 68bb66e 的分支和标签 CI 均通过。
+- 验证脚本第一次把 PowerShell 文件附加属性误序列化成下载路径，准备阶段因路径过长失败且未覆盖旧版本；修正脚本时客户端自身已完成升级，重复脚本因旧窗口退出停止。这两次辅助脚本失败不作为产品自动更新通过证据；通过结论来自实际客户端更新任务与升级后健康检查。升级期间没有取得完整的前后网络快照对比，不能用前述隔离连接测试的快照替代。
