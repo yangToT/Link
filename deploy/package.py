@@ -24,7 +24,7 @@ if args.client_only:
 zip_package('Link-server-windows-amd64-v'+version+'.zip',base+[(artifacts/'server-windows-amd64'/name,name) for name in ['LinkServer.exe','Uninstall.exe']]+[(root/'deploy/uninstall-windows-server.ps1','uninstall.ps1')])
 files=base+[(artifacts/'server-linux-amd64/link-server','link-server'),(artifacts/'vendor/netbird-server','vendor/netbird-server'),(artifacts/'vendor/linux/netbird','vendor/netbird'),(artifacts/'vendor/upstream.json','vendor/upstream.json'),(artifacts/'vendor/netbird-source-v0.79.0.tar.gz','vendor/netbird-source-v0.79.0.tar.gz'),(root/'deploy/install.sh','deploy/install.sh'),(root/'deploy/bootstrap.py','deploy/bootstrap.py')]
 files += [(artifacts/'server-linux-amd64/link-uninstall','link-uninstall'),(root/'deploy/uninstall.py','deploy/uninstall.py'),(root/'deploy/uninstall.sh','deploy/uninstall.sh')]
-files += [(root/'deploy/configure-layer2.py','deploy/configure-layer2.py')]
+files += [(root/('deploy/'+name),'deploy/'+name) for name in ['configure-layer2.py','layer2_transport.py']]
 with tarfile.open(release/('Link-server-linux-amd64-v'+version+'.tar.gz'),'w:gz') as archive:
  for source,target in files:
   info=archive.gettarinfo(str(source),arcname=target);info.uid=info.gid=0;info.uname=info.gname='';info.mode=0o755 if target in ['link-server','link-uninstall','vendor/netbird','vendor/netbird-server','deploy/install.sh','deploy/uninstall.sh','deploy/uninstall.py'] else 0o644

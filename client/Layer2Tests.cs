@@ -26,6 +26,12 @@ internal static class Layer2Tests {
   string directory=Path.Combine(Path.GetTempPath(),"Link-Layer2-Test-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
   try{
    string file=Path.Combine(directory,"layer2-journal.json");
+   var setup=new List<string>();
+   var member=new Layer2(directory,()=>Common.Map(),(c,e,t,x)=>{if(e||x)throw new Exception("Wrong member context");setup.Add(t);return "";},p=>"{}");
+   member.ConnectMember(Common.Map(),Common.Map("endpoint","100.88.0.1:24448","hub","LINK","username","fixture","password","fixture"),"Link-ABCDEF012345","VPN127",Path.Combine(directory,"server.pem"));
+   if(string.Join(",",setup.Select(s=>s.Split(' ')[0]))!="AccountCreate,AccountPasswordSet,AccountServerCertSet,AccountServerCertEnable,AccountDetailSet,AccountConnect")throw new Exception("Member authentication/certificate ordering changed");
+   var accepted=new[]{"MAXTCP","INTERVAL","TTL","HALF","BRIDGE","MONITOR","NOTRACK","NOQOS"};
+   if(setup[4].Split(' ').Skip(2).Any(s=>!accepted.Contains(s.Split(':')[0].TrimStart('/'))))throw new Exception("Unsupported Stable AccountDetailSet parameter");
    File.WriteAllText(file,Common.Json(Common.Map("account","Link-ABCDEF012345","nic","LNKABCDEF012345","role","member","accountCreated",true,"nicCreated",true,"bridgeCreated",false)));
    var commands=new List<string>();bool fail=true;
    Func<Dictionary<string,object>,bool,string,bool,string> cli=(cfg,entry,text,cleanup)=>{if(!cleanup||entry)throw new Exception("Invalid cleanup context");commands.Add(text);if(fail&&text.StartsWith("NicDelete"))throw new IOException("Synthetic driver busy");return "";};

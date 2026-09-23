@@ -169,6 +169,8 @@ def main():
             raise RuntimeError('Component version differs from audited build')
         rpc('CreateHub', {'HubName_str': 'LINK', 'AdminPasswordPlainText_str': secrets.token_hex(32), 'Online_bool': True, 'MaxSession_u32': 128})
         rpc('GetHub', {'HubName_str': 'LINK'})
+        from layer2_transport import configure_transport
+        configure_transport(rpc, 'LINK')
         rpc('DisableSecureNAT', {'HubName_str': 'LINK'})
         if rpc('GetHubStatus', {'HubName_str': 'LINK'}).get('SecureNATEnabled_bool') is not False:
             raise RuntimeError('Virtual NAT/DHCP unexpectedly enabled')

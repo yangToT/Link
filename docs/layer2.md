@@ -80,6 +80,8 @@ $bridgeSecret = Read-Host '本机 Bridge 管理密码' -AsSecureString
 
 ## 验证
 
+SoftEther Stable 4.44/9807 的 `AccountDetailSet` 不支持 `/DISABLEUDP`。客户端 alpha.9 已移除此参数；TCP 传输由专用 Hub 的 `DisableUdpAcceleration` 选项保证。新部署准备脚本自动设置。已部署的 Linux 实例须先将本版 `deploy/layer2_transport.py` 放到 `/ROOT/Link/deploy/`，运行 `sudo python3 /ROOT/Link/deploy/layer2_transport.py`：仅调整 Link 的 Hub、保留其他选项并回读验证，无需重启服务。不应直接改写正在运行的 SoftEther 配置文件。
+
 本地检查：Go 测试覆盖 TLS 固定校验、授权撤销、模式切换约束和 TUN 报告过滤；C# 自检覆盖物理网卡选择、网段冲突、断开失败后的日志恢复；PowerShell 检查使用 cmdlet 替身验证路由归属，不修改宿主机网络。网页测试使用合成 API。
 
 ```powershell

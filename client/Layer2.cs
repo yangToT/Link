@@ -88,6 +88,14 @@ internal sealed class Layer2 {
   Common.ReadCertificate(Encoding.ASCII.GetBytes(Common.Text(plan,"certificate")));
  }
  static IEnumerable<string> Strings(Dictionary<string,object> d,string key){object value;if(!d.TryGetValue(key,out value)||!(value is System.Collections.IEnumerable))return new string[0];return ((System.Collections.IEnumerable)value).Cast<object>().Select(Convert.ToString);}
+ internal void ConnectMember(Dictionary<string,object> cfg,Dictionary<string,object> plan,string name,string nic,string cert){
+  Cli(cfg,false,"AccountCreate "+name+" /SERVER:"+Common.Quote(Common.Text(plan,"endpoint"))+" /HUB:"+Atom(Common.Text(plan,"hub"))+" /USERNAME:"+Atom(Common.Text(plan,"username"))+" /NICNAME:"+nic);
+  Cli(cfg,false,"AccountPasswordSet "+name+" /PASSWORD:"+Atom(Common.Text(plan,"password"))+" /TYPE:standard");
+  Cli(cfg,false,"AccountServerCertSet "+name+" /LOADCERT:"+Common.Quote(cert));Cli(cfg,false,"AccountServerCertEnable "+name);
+  // Stable 4.44 has no /DISABLEUDP option. The dedicated hub disables UDP acceleration.
+  Cli(cfg,false,"AccountDetailSet "+name+" /MAXTCP:2 /INTERVAL:1 /TTL:0 /HALF:no /BRIDGE:no /MONITOR:no /NOTRACK:yes /NOQOS:yes");
+  Cli(cfg,false,"AccountConnect "+name);
+ }
  internal void Apply(Dictionary<string,object> plan,Dictionary<string,object> local,string publicServer){
   try{
    ValidatePlan(plan,local);var network=Common.Obj(local,"network");string role=Common.Text(plan,"role");
@@ -112,11 +120,7 @@ internal sealed class Layer2 {
      Cli(cfg,true,"CascadeOnline "+name);
     }else{
      CreateNic(cfg);Guard("prepare");
-     owned["accountCreated"]=true;Save();Cli(cfg,false,"AccountCreate "+name+" /SERVER:"+Common.Quote(Common.Text(plan,"endpoint"))+" /HUB:"+Atom(Common.Text(plan,"hub"))+" /USERNAME:"+Atom(Common.Text(plan,"username"))+" /NICNAME:"+nic);
-     Cli(cfg,false,"AccountPasswordSet "+name+" /PASSWORD:"+Atom(Common.Text(plan,"password"))+" /TYPE:standard");
-     Cli(cfg,false,"AccountServerCertSet "+name+" /LOADCERT:"+Common.Quote(cert));Cli(cfg,false,"AccountServerCertEnable "+name);
-     Cli(cfg,false,"AccountDetailSet "+name+" /MAXTCP:2 /INTERVAL:1 /TTL:0 /HALF:no /BRIDGE:no /MONITOR:no /NOTRACK:yes /NOQOS:yes /DISABLEUDP:yes");
-     Cli(cfg,false,"AccountConnect "+name);
+     owned["accountCreated"]=true;Save();ConnectMember(cfg,plan,name,nic,cert);
     }
     signature=next;
    }
