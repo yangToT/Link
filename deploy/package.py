@@ -1,7 +1,7 @@
 """Create release archives from an explicit allowlist; never package an instance directory."""
 import argparse,hashlib,json,pathlib,shutil,tarfile,zipfile
 parser=argparse.ArgumentParser()
-parser.add_argument('--version',default='0.2.0-alpha.4')
+parser.add_argument('--version',default='0.2.0-alpha.5')
 parser.add_argument('--client-only',action='store_true')
 args=parser.parse_args()
 root=pathlib.Path(__file__).resolve().parents[1];artifacts=root/'artifacts';release=artifacts/'release';release.mkdir(exist_ok=True)

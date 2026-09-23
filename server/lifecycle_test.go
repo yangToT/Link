@@ -91,23 +91,25 @@ func TestDeleteRequiresAdminSessionAndProtectsSelf(t *testing.T) {
 	}
 }
 func TestDisconnectReconnectKeepsDeviceIdentity(t *testing.T) {
-	a, _, _ := lifecycleApp(t)
+	a, calls, _ := lifecycleApp(t)
+	a.store.Data.EntryID = "target"
+	a.store.Data.RouteIDs = []string{"original-route"}
 	token := "target-secret-token-longer-than-32-chars"
 	for i := 0; i < 3; i++ {
 		if w := request(a.public(), "POST", "/agent/disconnect", nil, token); w.Code != 200 {
 			t.Fatal(w.Code, w.Body.String())
 		}
-		if publicDevice(*a.store.device("target")).Connected || a.store.device("target").State != "paused" {
+		if publicDevice(*a.store.device("target")).Connected || a.store.device("target").State != "active" {
 			t.Fatal("disconnect not immediate")
-		}
-		if w := request(a.public(), "POST", "/agent/heartbeat", map[string]any{}, token); !strings.Contains(w.Body.String(), "disconnect") {
-			t.Fatal("heartbeat reactivated device")
 		}
 		w := request(a.public(), "POST", "/agent/reconnect", nil, token)
 		var result map[string]string
 		json.Unmarshal(w.Body.Bytes(), &result)
-		if w.Code != 200 || result["setupKey"] != "new-key" || len(a.store.Data.Devices) != 2 || a.store.device("target").TokenHash != digest(token) {
+		if w.Code != 200 || result["setupKey"] != "" || len(a.store.Data.Devices) != 2 || a.store.device("target").TokenHash != digest(token) {
 			t.Fatal("reconnect created another identity", w.Body.String())
+		}
+		if len(*calls) != 0 || a.store.device("target").PeerID != "peer" || len(a.store.Data.RouteIDs) != 1 || a.store.Data.RouteIDs[0] != "original-route" {
+			t.Fatal("voluntary departure removed peer or route")
 		}
 	}
 }

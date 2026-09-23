@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/url"
+	"time"
 )
 
 // Called with the store locked. Keep the record until upstream cleanup succeeds,
@@ -80,7 +81,8 @@ func (a *App) deleteDevice(w http.ResponseWriter, d *Device, self string) {
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
-// Voluntary disconnect keeps registration, but revokes the current transport.
+// Voluntary departure retains the peer so routed entries keep their route references.
+// The authorized client stops its local transport; administrator kick/delete still revoke peers.
 func (a *App) disconnect(w http.ResponseWriter, r *http.Request) {
 	a.store.Lock()
 	defer a.store.Unlock()
@@ -93,14 +95,11 @@ func (a *App) disconnect(w http.ResponseWriter, r *http.Request) {
 		failure(w, 503, "二层访问撤销未完成")
 		return
 	}
-	if d.GroupID == "" || a.backend.revokeGroup(d.GroupID) != nil {
-		failure(w, 502, "网络访问撤销未完成")
-		return
-	}
 	old := *d
-	d.State = "paused"
 	d.Connected = false
-	d.PeerID = ""
+	d.LastSeen = time.Time{}
+	d.Layer2.State = "off"
+	d.Layer2.IP = ""
 	if a.store.persist() != nil {
 		*d = old
 		failure(w, 500, "保存断开状态失败")
