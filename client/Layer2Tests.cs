@@ -20,6 +20,7 @@ internal static class Layer2Tests {
    Func<Dictionary<string,object>,string> guard=p=>{if(Common.Text(p,"action")!="cleanup")throw new Exception("Unexpected mutation");return "{\"routeOwned\":false}";};
    var layer=new Layer2(directory,()=>Common.Map(),cli,guard);layer.Stop();
    if(!File.Exists(file)||Common.Text(layer.Status,"state")!="cleanup-failed")throw new Exception("Failed cleanup lost recovery journal");
+   if(!Common.Text(layer.Status,"message").Contains("虚拟网卡"))throw new Exception("Cleanup failure stage missing");
    if(commands.Any(c=>c.Contains("foreign"))||!commands.Contains("AccountDisconnect Link-ABCDEF012345"))throw new Exception("Ownership or disconnect order failed");
    int deletedAccounts=commands.Count(c=>c.StartsWith("AccountDelete"));fail=false;
    // A fresh process must resume only incomplete operations.

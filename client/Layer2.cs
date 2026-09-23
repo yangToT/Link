@@ -103,12 +103,12 @@ internal sealed class Layer2 {
     var address=adapter==null?null:adapter.GetIPProperties().UnicastAddresses.FirstOrDefault(a=>a.Address.AddressFamily==System.Net.Sockets.AddressFamily.InterNetwork&&Agent.Private(a.Address)&&Strings(plan,"networks").Any(n=>NetworkDiscovery.Contains(n,a.Address+"/32")));
     Status=Common.Map("state",address==null?"waiting-address":"attached","message",address==null?"等待入口网络分配地址":"已获得局域网地址；双向服务可用性需单独验证","ip",address==null?"":address.Address.ToString());
    }
-  }catch(Exception e){Stop();Status=Common.Map("state",owned==null?"blocked":"cleanup-failed","message",e is InvalidOperationException?e.Message:"二层接入未完成，请检查组件与网络配置","ip","");}
+  }catch(Exception e){Stop();if(owned==null)Status=Common.Map("state","blocked","message",e is InvalidOperationException?e.Message:"二层接入未完成，请检查组件与网络配置","ip","");}
  }
  void Guard(string action){var payload=new Dictionary<string,object>(owned);payload["action"]=action;string output=shell(payload);var result=Common.Parse(output.Trim());if(result.ContainsKey("routeOwned")){owned["routeOwned"]=Common.Bool(result,"routeOwned");Save();}}
  internal void Stop(){
   signature="";if(owned==null){Status=Common.Map("state","off","message","局域网接入已断开","ip","");return;}
-  bool okay=true;var cfg=new Dictionary<string,object>();if(new[]{"accountCreated","bridgeCreated","nicCreated"}.Any(flag=>Common.Bool(owned,flag)))try{cfg=loadConfig();}catch{okay=false;}
+  var failures=new List<string>();var cfg=new Dictionary<string,object>();if(new[]{"accountCreated","bridgeCreated","nicCreated"}.Any(flag=>Common.Bool(owned,flag)))try{cfg=loadConfig();}catch{failures.Add("本机组件配置");}
   bool entry=Common.Text(owned,"role")=="entry";string account=Atom(Common.Text(owned,"account"));
   foreach(string flag in new[]{"accountCreated","bridgeCreated","nicCreated"}){
    if(!Common.Bool(owned,flag))continue;
@@ -117,11 +117,11 @@ internal sealed class Layer2 {
     if(flag=="bridgeCreated")Cli(cfg,true,"BridgeDelete BRIDGE /DEVICE:"+Common.Quote(Common.Text(owned,"bridgeDevice")),true);
     if(flag=="nicCreated"){Cli(cfg,false,"NicDisable "+Atom(Common.Text(owned,"nic")),true);Cli(cfg,false,"NicDelete "+Atom(Common.Text(owned,"nic")),true);}
     owned[flag]=false;Save();
-   }catch{okay=false;}
+   }catch{failures.Add(flag=="accountCreated"?"连接":flag=="bridgeCreated"?"网卡桥接":"虚拟网卡");}
   }
-  try{Guard("cleanup");}catch{okay=false;}
-  if(okay){File.Delete(journal);owned=null;Status=Common.Map("state","off","message","局域网接入已断开，Link 网络规则已撤销","ip","");}
-  else Status=Common.Map("state","cleanup-failed","message","网络清理未完成，将保留恢复记录并重试","ip","");
+  try{Guard("cleanup");}catch{failures.Add("网络路由");}
+  if(failures.Count==0){File.Delete(journal);owned=null;Status=Common.Map("state","off","message","局域网接入已断开，Link 网络规则已撤销","ip","");}
+  else Status=Common.Map("state","cleanup-failed","message","网络清理未完成（"+string.Join("、",failures)+"），将保留恢复记录并重试","ip","");
  }
  internal void Recover(){Stop();}
 }

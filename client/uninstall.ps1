@@ -57,7 +57,7 @@ foreach($name in $ownedServices | Where-Object {$_ -ne 'LinkAgent'}) {
 function Remove-OwnedLayer2Driver {
 $componentJournal=Join-Path $data 'layer2-install.json'
 if(Test-Path -LiteralPath $componentJournal){
-    $record=Get-Content -LiteralPath $componentJournal -Raw | ConvertFrom-Json
+    $record=Get-Content -LiteralPath $componentJournal -Raw -Encoding UTF8 | ConvertFrom-Json
     if($record.program -ne (Join-Path $program 'softether')){throw 'Component journal ownership mismatch'}
     $newSeLow=$record.PSObject.Properties.Name -contains 'driversBefore' -and @($record.driversBefore | Where-Object Name -eq 'SeLow').Count -eq 0
     $driver=Get-CimInstance Win32_SystemDriver -Filter "Name='SeLow'"

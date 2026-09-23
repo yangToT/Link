@@ -20,10 +20,10 @@ function Find-NetRoute {param($RemoteIPAddress)
  [pscustomobject]@{DestinationPrefix='0.0.0.0/0';InterfaceIndex=$(if($global:LinkGuardTestintercept){99}elseif($RemoteIPAddress -eq '100.88.0.1'){9}else{6})}
 }
 try {
- $p=@{account='Link-ABCDEF012345';nic='LNKABCDEF012345';adapterId='{11111111-1111-1111-1111-111111111111}';publicServer='203.0.113.1';overlayEndpoint='100.88.0.1';gateway='192.168.30.1';role='member';action='pin'}
+ $p=@{account='Link-ABCDEF012345';nic='LNKABCDEF012345';adapterId='{11111111-1111-1111-1111-111111111111}';publicServer='203.0.113.1';overlayEndpoint='100.88.0.1';gateway='192.168.30.1';role='member';action='pin';adapterName=([string][char]0x4ee5+[char]0x592a+[char]0x7f51)}
  $request=Join-Path $testDir 'request.json'
  $guard=Join-Path $PSScriptRoot 'layer2-network.ps1'
- function Invoke-Guard {$p | ConvertTo-Json | Set-Content -LiteralPath $request -Encoding UTF8; & $guard -Request $request}
+ function Invoke-Guard {[IO.File]::WriteAllText($request,($p | ConvertTo-Json),(New-Object Text.UTF8Encoding($false))); & $guard -Request $request}
  # A member has no virtual adapter yet during pin; it must still succeed.
  $null=Invoke-Guard
  if($global:LinkGuardTestroutes.Count -ne 1){throw 'Pin was not created'}

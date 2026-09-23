@@ -1,6 +1,6 @@
 param([Parameter(Mandatory=$true)][string]$Request)
 $ErrorActionPreference='Stop'
-$p=Get-Content -LiteralPath $Request -Raw | ConvertFrom-Json
+$p=Get-Content -LiteralPath $Request -Raw -Encoding UTF8 | ConvertFrom-Json
 if($p.account -notmatch '^Link-[A-F0-9]{12}$' -or $p.nic -notmatch '^LNK[A-F0-9]{12}$'){throw 'Invalid resource ownership'}
 $physical=Get-NetAdapter -IncludeHidden | Where-Object {$_.InterfaceGuid.ToString().Trim('{}') -eq $p.adapterId.Trim('{}')}
 $ip=[Net.IPAddress]::Parse($p.publicServer)
@@ -10,7 +10,7 @@ $ownedRoute=[bool]$p.routeOwned
 $ownerFile=Join-Path (Split-Path -Parent $Request) 'layer2-route-owner.json'
 if($p.action -eq 'cleanup'){
  if(Test-Path -LiteralPath $ownerFile){
-  $owner=Get-Content -LiteralPath $ownerFile -Raw | ConvertFrom-Json
+  $owner=Get-Content -LiteralPath $ownerFile -Raw -Encoding UTF8 | ConvertFrom-Json
   if($owner.account -ne $p.account -or $owner.prefix -ne $prefix -or $owner.adapterId -ne $p.adapterId){throw 'Route owner differs; recovery requires review'}
   if(-not $physical){throw 'Physical adapter unavailable; retain route recovery record'}
   Get-NetRoute -DestinationPrefix $prefix -InterfaceIndex $physical.ifIndex -ErrorAction SilentlyContinue | Where-Object {$_.NextHop -eq $owner.gateway -and $_.RouteMetric -eq 1 -and $_.Protocol -eq 'NetMgmt'} | Remove-NetRoute -Confirm:$false
