@@ -23,6 +23,8 @@ const server=http.createServer(async(req,res)=>{if(req.url==='/api/events'){even
  await page.getByRole('button',{name:'设备',exact:true}).click();fs.mkdirSync(path.join(__dirname,'../../artifacts/qa'),{recursive:true});await page.screenshot({path:path.join(__dirname,'../../artifacts/qa/admin.png'),fullPage:true});
  await page.getByRole('button',{name:'网络入口',exact:true}).click();assert(await page.getByRole('button',{name:'启用二层接入',exact:true}).isDisabled());
  state.mappings=[];state.layer2Configured=true;await page.reload();await page.getByRole('button',{name:'网络入口',exact:true}).click();
+ assert(await page.getByRole('button',{name:'启用二层接入',exact:true}).isDisabled(),'entry opted out but mode could be enabled');
+ devices[0].layer2={enabled:true,prepared:true,state:'off'};broadcast();await page.waitForFunction(()=>!document.querySelector('[data-action="network-mode"]').disabled);
  await page.getByRole('button',{name:'启用二层接入',exact:true}).click();await page.getByRole('button',{name:'切回路由模式',exact:true}).waitFor();assert.equal(state.networkMode,'bridged');
  await page.getByRole('button',{name:'服务映射',exact:true}).click();await page.getByRole('heading',{name:'局域网服务'}).waitFor();assert.equal(await page.getByRole('button',{name:'＋ 添加映射'}).count(),0);assert((await page.locator('#content').innerText()).includes('192.168.20.50'));
  await page.screenshot({path:path.join(__dirname,'../../artifacts/qa/layer2-admin.png'),fullPage:true});

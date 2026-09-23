@@ -20,10 +20,11 @@ function render(){document.querySelectorAll('[data-page]').forEach(b=>b.classLis
  const bridged=state.networkMode==='bridged',info=entry?.network;
  html+=`<div class="panel"><div class="row"><span>物理网卡</span><span>${esc(info?.adapterName||'未确认')} · ${esc(entry?.lanIp||'无可用地址')}</span></div><div class="row"><span>代理 / TUN</span><span>${info?.tunDetected?'已检测到':'未检测到'}</span></div><div class="row"><span>接入模式</span><strong>${bridged?'二层局域网接入（预览）':'路由与端口映射'}</strong></div><p class="note">${esc(info?.warning||'二层模式需要独立组件和有线入口，保持普通上网出口不变。')}</p>${button(bridged?'切回路由模式':'启用二层接入','network-mode',bridged?'routed':'bridged')}</div>`;
  if(!state.layer2Configured)html+='<p class="note">二层服务端组件尚未配置；此时不能启用二层接入。</p>';
+ else if(entry&&!entry.layer2?.enabled)html+='<p class="note">请在入口设备的 Link 客户端打开“功能与组件”，安装并启用“局域网接入”。其他设备也可在自己的客户端选择是否启用。</p>';
 }
 if(page==='mappings'&&state.networkMode==='bridged')html=heading('局域网服务','使用设备的局域网地址和应用实际端口，无需逐个添加映射。')+state.devices.map(d=>`<div class="panel"><strong>${esc(d.name)}</strong><p class="mono">${esc(d.layer2?.ip||'等待地址')}</p><p>${esc(d.layer2?.message||'等待设备报告')}</p><p class="note">取得地址不等于业务已经可用；应用仍需监听可达地址。</p></div>`).join('');
 content.innerHTML=html;
-const enable=content.querySelector('[data-action="network-mode"][data-id="bridged"]');if(enable)enable.disabled=!state.layer2Configured||!entry?.connected||!entry?.network?.bridgeEligible||state.mappings.length>0;
+const enable=content.querySelector('[data-action="network-mode"][data-id="bridged"]');if(enable)enable.disabled=!state.layer2Configured||!entry?.connected||!entry?.network?.bridgeEligible||!entry?.layer2?.enabled||!entry?.layer2?.prepared||state.mappings.length>0;
 }
 let events=null,streamEpoch='',revision=-1;const retiredEpochs=new Set();
 function receive(next){

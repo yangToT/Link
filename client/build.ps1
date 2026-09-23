@@ -10,6 +10,7 @@ if ($Check) { $arguments = @('/nologo','/target:exe','/platform:x64','/optimize+
 $icon = Join-Path $PSScriptRoot 'assets\Link.ico'
 $arguments += @(('/win32icon:' + $icon), ('/resource:' + $icon + ',Link.AppIcon'))
 $arguments += '/resource:' + (Join-Path $PSScriptRoot 'layer2-network.ps1') + ',Link.Layer2Network'
+foreach($script in @('install-layer2.ps1','prepare-layer2.ps1','manage-components.ps1','uninstall.ps1')){$arguments += '/resource:' + (Join-Path $PSScriptRoot $script) + ',Link.Script.' + $script}
 $arguments += $references | ForEach-Object { '/reference:' + (Join-Path $framework $_) }
 $arguments += Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' | Select-Object -ExpandProperty FullName
 & (Join-Path $framework 'csc.exe') @arguments

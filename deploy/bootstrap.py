@@ -33,6 +33,8 @@ if not network_config.exists():
 # Upstream metrics binds all interfaces. An owned nft table isolates only Link internal ports.
 guard=DEPLOY/'guard.nft'
 guard.write_text('delete table inet link_guard\ntable inet link_guard {\n chain input { type filter hook input priority -10; policy accept;\n iifname != "lo" tcp dport {24445,24446,24447} drop\n iifname != "lo" iifname != "Link0" tcp dport 24444 drop\n iifname "Link0" ct state established,related accept\n iifname "Link0" tcp dport 24444 accept\n iifname "Link0" drop\n }\n}\n')
+if cfg.get('layer2'):
+ guard.write_text(guard.read_text().replace('tcp dport 24444','tcp dport {24444,24448}'))
 guard_script=DEPLOY/'guard.sh'
 guard_script.write_text('#!/bin/sh\nset -eu\nnft list table inet link_guard >/dev/null 2>&1 || nft add table inet link_guard\nnft -f /ROOT/Link/deploy/guard.nft\n')
 guard_script.chmod(0o700);run(str(guard_script))

@@ -15,17 +15,22 @@ using System.Windows.Threading;
 
 namespace Link {
 internal static class Program {
- [STAThread] public static void Main(string[] args){try{Start(args);}catch(Exception e){File.WriteAllText(Path.Combine(Common.Bin,"startup-error.txt"),e.GetType().FullName+"\n"+e.Message+"\n"+e.StackTrace);Environment.ExitCode=1;}}
+ [STAThread] public static void Main(string[] args){try{Start(args);}catch(Exception e){string folder=Components.Administrator?Common.Bin:Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Link");Directory.CreateDirectory(folder);File.WriteAllText(Path.Combine(folder,"startup-error.txt"),e.GetType().FullName+"\n"+e.Message+"\n"+e.StackTrace);Environment.ExitCode=1;}}
  static void Start(string[] args){
   ServicePointManager.SecurityProtocol=SecurityProtocolType.Tls12;
+  if(args.Contains("--install-core")){if(!Components.Administrator)throw new InvalidOperationException("需要管理员权限");Install();return;}
+  if(args.Length==2&&args[0]=="--components"){Components.Worker(args[1]);return;}
+  if(args.Contains("--disable-layer2")){Common.Pipe(Common.Map("action","layer2-enable","enabled",false));return;}
   if(args.Contains("--job-child")){System.Threading.Thread.Sleep(30000);return;}
   if(args.Contains("--service")){ServiceBase.Run(new Agent());return;}
   if(args.Contains("--self-test")){SelfTest.Run();return;}
   if(args.Contains("--tray-test")){SelfTest.Tray();return;}
   if(args.Contains("--network-check")){Console.WriteLine(Common.Json(NetworkDiscovery.Discover("")));return;}
+  if(args.Contains("--layer2-check")){Layer2.CheckComponents();Console.WriteLine("PASS: authenticated local Client and Bridge management; no connections created");return;}
   if(args.Contains("--cleanup-layer2")){Common.ProtectFolder();var layer=new Layer2();layer.Recover();if(Common.Text(layer.Status,"state")=="cleanup-failed")throw new InvalidOperationException("二层资源清理未完成，保留恢复记录");return;}
   if(args.Length==2&&args[0]=="--check-server"){var config=Common.Parse(File.ReadAllText(args[1]));Common.Request(Common.Text(config,"server")+"/health",Common.Text(config,"pin"),"",null);bool rejected=false;try{Common.Request(Common.Text(config,"server")+"/health",new string('0',64),"",null);}catch(System.Net.WebException){rejected=true;}if(!rejected)throw new Exception("Wrong CA pin accepted");Console.WriteLine("PASS: real server pinned TLS; wrong fingerprint rejected");return;}
   if(args.Contains("--render")){var window=new MainWindow(true);window.RenderImage();return;}
+  if(args.Contains("--render-components")){new MainWindow(true).RenderComponentsImage(false);new MainWindow(true).RenderComponentsImage(true);return;}
   if(args.Contains("--preview")){new Application().Run(new MainWindow(true));return;}
   using(var restore=new System.Threading.EventWaitHandle(false,System.Threading.EventResetMode.AutoReset,"Local\\Link.Client.Restore")){
    bool first;using(var instance=new System.Threading.Mutex(true,"Local\\Link.Client.Window",out first)){
@@ -38,12 +43,23 @@ internal static class Program {
   }
  }
  internal static void Install(){
+  if(!Components.Administrator){Components.Elevate("--install-core");return;}
   string directory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"Link");Directory.CreateDirectory(directory);
-  foreach(string name in new[]{"Link.exe","Uninstall.exe","uninstall.ps1","netbird.exe","wintun.dll","THIRD-PARTY-NOTICES.md","LICENSE"}){
+  string[] files={"Link.exe","Uninstall.exe","uninstall.ps1","netbird.exe","wintun.dll","THIRD-PARTY-NOTICES.md","LICENSE"};
+  foreach(string name in files)if(!File.Exists(Path.Combine(Common.Bin,name)))throw new InvalidOperationException("安装包缺少 "+name);
+  if((File.GetAttributes(directory)&FileAttributes.ReparsePoint)!=0)throw new InvalidOperationException("安装目录需要人工检查");
+  Common.ProtectFolder();string backup=Path.Combine(Common.Home,"backups","core-"+DateTime.UtcNow.ToString("yyyyMMddHHmmssfff"));Directory.CreateDirectory(backup);
+  foreach(string name in files){string target=Path.Combine(directory,name);if(File.Exists(target)){if((File.GetAttributes(target)&FileAttributes.ReparsePoint)!=0)throw new InvalidOperationException("安装文件需要人工检查");File.Copy(target,Path.Combine(backup,name));}}
+  bool exists=ServiceController.GetServices().Any(s=>s.ServiceName=="LinkAgent");
+  if(exists){using(var key=Microsoft.Win32.Registry.LocalMachine.OpenSubKey("SYSTEM\\CurrentControlSet\\Services\\LinkAgent")){if(Convert.ToString(key.GetValue("ImagePath"))!=Common.Quote(Path.Combine(directory,"Link.exe"))+" --service")throw new InvalidOperationException("后台服务属于另一安装，拒绝替换");}using(var s=new ServiceController("LinkAgent")){if(s.Status!=ServiceControllerStatus.Stopped){s.Stop();s.WaitForStatus(ServiceControllerStatus.Stopped,TimeSpan.FromSeconds(150));}}}
+  try{
+  Components.SetOwner();
+  if(!Path.GetFullPath(Common.Bin).TrimEnd('\\').Equals(directory,StringComparison.OrdinalIgnoreCase))foreach(var process in Process.GetProcessesByName("Link")){try{if(process.Id!=Process.GetCurrentProcess().Id&&process.SessionId!=0&&process.MainModule.FileName.Equals(Path.Combine(directory,"Link.exe"),StringComparison.OrdinalIgnoreCase)){process.Kill();process.WaitForExit(5000);}}finally{process.Dispose();}}
+  foreach(string name in files){
    string source=Path.Combine(Common.Bin,name);if(!File.Exists(source)){if(name.EndsWith(".exe"))throw new InvalidOperationException("安装包缺少 "+name);continue;}
    string target=Path.Combine(directory,name);if(!source.Equals(target,StringComparison.OrdinalIgnoreCase))File.Copy(source,target,true);
   }
-  Common.ProtectFolder();bool exists=ServiceController.GetServices().Any(s=>s.ServiceName=="LinkAgent");
+  Common.ProtectFolder();
   File.WriteAllText(Path.Combine(Common.Home,"install-owned.json"),Common.Json(Common.Map("program",directory,"version",Common.Version)));
   using(var uninstall=Microsoft.Win32.Registry.LocalMachine.CreateSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Link.Client")){
    uninstall.SetValue("DisplayName","Link");uninstall.SetValue("DisplayVersion",Common.Version);uninstall.SetValue("InstallLocation",directory);uninstall.SetValue("DisplayIcon",Path.Combine(directory,"Link.exe"));uninstall.SetValue("UninstallString",Common.Quote(Path.Combine(directory,"Uninstall.exe")));uninstall.SetValue("NoModify",1);uninstall.SetValue("NoRepair",1);
@@ -51,6 +67,10 @@ internal static class Program {
   if(!exists)Common.Run("sc.exe","create LinkAgent binPath= \"\\\""+Path.Combine(directory,"Link.exe")+"\\\" --service\" start= auto DisplayName= "+Common.Quote("Link 后台连接"));
   using(var service=new ServiceController("LinkAgent")){if(service.Status!=ServiceControllerStatus.Running){service.Start();service.WaitForStatus(ServiceControllerStatus.Running,TimeSpan.FromSeconds(20));}}
   Common.Run("sc.exe","failure LinkAgent reset= 86400 actions= restart/5000/restart/15000/restart/60000");
+  }catch{
+   if(exists){using(var service=new ServiceController("LinkAgent")){if(service.Status!=ServiceControllerStatus.Stopped){service.Stop();service.WaitForStatus(ServiceControllerStatus.Stopped,TimeSpan.FromSeconds(150));}foreach(string name in files){string old=Path.Combine(backup,name);if(File.Exists(old)&&!Path.Combine(Common.Bin,name).Equals(Path.Combine(directory,name),StringComparison.OrdinalIgnoreCase))File.Copy(old,Path.Combine(directory,name),true);}service.Start();}}
+   throw;
+  }
  }
 }
 internal sealed class MainWindow : Window {
@@ -68,7 +88,7 @@ internal sealed class MainWindow : Window {
   var brand=new TextBlock{Text="Link",FontSize=27,FontWeight=FontWeights.SemiBold,Margin=new Thickness(8,0,0,32)};DockPanel.SetDock(brand,Dock.Top);rail.Children.Add(brand);
   var foot=new TextBlock{Text="SELF-HOSTED\n"+Common.Version,Foreground=muted,FontSize=10,LineHeight=19,Margin=new Thickness(8)};DockPanel.SetDock(foot,Dock.Bottom);rail.Children.Add(foot);
   var navigation=new StackPanel();rail.Children.Add(navigation);
-  foreach(var page in new[]{new[]{"devices","设备"},new[]{"services","服务"},new[]{"settings","设置"}}){string key=page[0];var b=Button(page[1],()=>{activePage=key;Render();});b.HorizontalContentAlignment=HorizontalAlignment.Left;b.Margin=new Thickness(0,3,0,3);navigation.Children.Add(b);}
+  foreach(var page in new[]{new[]{"devices","设备"},new[]{"services","服务"},new[]{"components","功能与组件"},new[]{"settings","设置"}}){string key=page[0];var b=Button(page[1],()=>{activePage=key;Render();});b.HorizontalContentAlignment=HorizontalAlignment.Left;b.Margin=new Thickness(0,3,0,3);navigation.Children.Add(b);}
   var main=new Grid{Margin=new Thickness(16,28,30,22)};Grid.SetColumn(main,1);root.Children.Add(main);main.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});main.RowDefinitions.Add(new RowDefinition{Height=new GridLength(1,GridUnitType.Star)});main.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
   var top=new DockPanel{Margin=new Thickness(0,0,0,20)};main.Children.Add(top);connection.Content="连接";StyleButton(connection);connection.Click+=async(s,e)=>await Connect();DockPanel.SetDock(connection,Dock.Right);top.Children.Add(connection);
   var headline=new StackPanel();headline.Children.Add(new TextBlock{Text="我的网络",FontSize=22,FontWeight=FontWeights.SemiBold});status.Text="未连接";status.Foreground=muted;status.Margin=new Thickness(0,7,0,0);headline.Children.Add(status);top.Children.Add(headline);
@@ -112,6 +132,7 @@ internal sealed class MainWindow : Window {
   if(Common.Text(state,"networkMode")=="bridged"){
    var bridge=Common.Obj(snapshot,"layer2");body.Children.Add(Card(new TextBlock{Text="局域网接入 · "+Common.Text(bridge,"message","准备中")+"\n"+Common.Text(bridge,"ip"),TextWrapping=TextWrapping.Wrap}));
   }
+  if(activePage=="components"){RenderComponents();return;}
   if(activePage=="settings"){
    body.Children.Add(new TextBlock{Text="连接设置",FontSize=17,Margin=new Thickness(0,0,0,15)});
    autoStart.Content="开机启动后台连接";autoStart.IsChecked=Common.Bool(snapshot,"autoStart");autoStart.Margin=new Thickness(0,12,0,12);body.Children.Add(autoStart);
@@ -143,6 +164,28 @@ internal sealed class MainWindow : Window {
   if(!online)body.Children.Add(Label("设备列表将在网络连接成功后更新。"));
  }
  static string MappingStatus(string s){return s=="ready"?"可用":s=="error"?"转发失败":s=="offline"?"设备离线":"等待同步";}
+ void RenderComponents(){
+  body.Children.Add(new TextBlock{Text="功能与组件",FontSize=17,Margin=new Thickness(0,0,0,16)});
+  var core=new StackPanel();core.Children.Add(new TextBlock{Text="基础连接",FontWeight=FontWeights.SemiBold});core.Children.Add(new TextBlock{Text="设备互联、管理中心与远程桌面。",Foreground=muted,Margin=new Thickness(0,8,0,12),TextWrapping=TextWrapping.Wrap});
+  bool compatible=Common.Text(snapshot,"version")==Common.Version;
+  core.Children.Add(new TextBlock{Text=compatible?"● 已安装 · "+Common.Version:"后台尚未安装或需要更新",Foreground=compatible?accent:muted});
+  if(!compatible)core.Children.Add(Button("安装 / 更新基础组件",async()=>await ManageCore()));body.Children.Add(Card(core));
+  var component=Common.Obj(snapshot,"components");bool installed=Common.Bool(component,"installed"),prepared=Common.Bool(component,"prepared"),enabled=Common.Bool(snapshot,"layer2Enabled"),maintenance=Common.Bool(snapshot,"componentBusy");
+  var optional=new StackPanel();var title=new DockPanel();var badge=new TextBlock{Text="可选",Foreground=muted,HorizontalAlignment=HorizontalAlignment.Right};DockPanel.SetDock(badge,Dock.Right);title.Children.Add(badge);title.Children.Add(new TextBlock{Text="局域网接入",FontWeight=FontWeights.SemiBold});optional.Children.Add(title);
+  optional.Children.Add(new TextBlock{Text="通过网络入口接入远端局域网。安装后默认关闭，由本机决定是否参与。",Foreground=muted,Margin=new Thickness(0,10,0,12),TextWrapping=TextWrapping.Wrap});
+  optional.Children.Add(new TextBlock{Text=Common.Bool(component,"foreign")?"检测到已有组件，需先确认归属":maintenance?"组件维护中":enabled?"● 已启用":prepared?"已安装 · 未启用":installed?"组件需要修复":"尚未安装",Foreground=enabled?accent:muted,Margin=new Thickness(0,0,0,12)});
+  var actions=new WrapPanel();
+  if(!installed){var add=Button("安装组件",async()=>await ManageComponent("install"));add.IsEnabled=compatible&&!busy&&!maintenance;actions.Children.Add(add);}
+  else{
+   var toggle=Button(enabled?"停用":"启用",async()=>await Execute(Common.Map("action","layer2-enable","enabled",!enabled)));toggle.IsEnabled=compatible&&!busy&&!maintenance&&(prepared||enabled);actions.Children.Add(toggle);
+   foreach(var item in new[]{new[]{"repair","修复"},new[]{"remove","卸载组件"}}){string action=item[0];var button=Button(item[1],async()=>await ManageComponent(action));button.IsEnabled=compatible&&!busy;button.Margin=new Thickness(8,0,0,0);actions.Children.Add(button);}
+  }
+  optional.Children.Add(actions);string note=Common.Text(snapshot,"componentMessage");if(note!="")optional.Children.Add(new TextBlock{Text=note,Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,12,0,0)});
+  if(enabled)optional.Children.Add(new TextBlock{Text=Common.Text(Common.Obj(snapshot,"layer2"),"message","等待管理端启用局域网接入"),Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,12,0,0)});
+  optional.Children.Add(new TextBlock{Text="包含 SoftEther Client 与 Bridge，Link 根据设备角色使用。停用先恢复网络；卸载只移除本功能组件。入口设备停用后，依赖它的局域网访问会中断。",FontSize=11,Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,16,0,0)});body.Children.Add(Card(optional));
+ }
+ async Task ManageCore(){if(busy||preview)return;busy=true;feedback.Text="正在安装基础组件，Windows 可能请求管理员权限…";Render();try{await Task.Run(()=>Components.Elevate("--install-core"));feedback.Text="基础组件已更新";}catch(Exception e){feedback.Text=e.Message;}finally{busy=false;}await Refresh();Render();}
+ async Task ManageComponent(string action){if(busy||preview)return;busy=true;feedback.Text=action=="remove"?"正在恢复网络并卸载组件…":"正在准备组件，首次下载可能需要几分钟…";Render();try{await Task.Run(()=>Components.Elevate("--components "+action));feedback.Text=action=="remove"?"组件已卸载":"组件已安装，局域网接入保持关闭";}catch(Exception e){feedback.Text=e.Message;}finally{busy=false;}await Refresh();Render();}
  async Task Refresh(){if(busy||refreshing||preview)return;refreshing=true;try{var next=await Task.Run(()=>Common.Pipe(Common.Map("action","status")));snapshot=next;if(activePage!="settings")Render();}catch{status.Text="后台服务未安装或未启动";}finally{refreshing=false;}if(openOnConnect&&management.IsEnabled){openOnConnect=false;await OpenManagement();}}
  async Task Execute(Dictionary<string,object> request){if(busy||preview)return;busy=true;connection.IsEnabled=false;try{await Task.Run(()=>Common.Pipe(request));feedback.Text="";}catch(Exception e){feedback.Text=e.Message;}finally{busy=false;}await Refresh();}
  async Task Connect(){if(!Common.Bool(snapshot,"registered")){await Enroll();return;}await Execute(Common.Map("action",Common.Bool(snapshot,"wanted")?"disconnect":"connect"));}
@@ -158,6 +201,7 @@ internal sealed class MainWindow : Window {
  [DllImport("dwmapi.dll")]static extern int DwmExtendFrameIntoClientArea(IntPtr window,ref Margins margins);
  void Glass(){try{var handle=new WindowInteropHelper(this).Handle;HwndSource.FromHwnd(handle).CompositionTarget.BackgroundColor=Colors.Transparent;var margins=new Margins{Left=-1};DwmExtendFrameIntoClientArea(handle,ref margins);var accent=new Accent{State=4,Color=unchecked((int)0xccf3f7f5)};var pointer=Marshal.AllocHGlobal(Marshal.SizeOf(accent));try{Marshal.StructureToPtr(accent,pointer,false);var data=new Composition{Attribute=19,Data=pointer,Size=Marshal.SizeOf(accent)};SetWindowCompositionAttribute(handle,ref data);}finally{Marshal.FreeHGlobal(pointer);}}catch{Background=new SolidColorBrush(Color.FromRgb(240,245,244));}}
  internal void RenderImage(){Render();var root=(FrameworkElement)Content;root.Width=820;root.Height=570;root.Measure(new Size(820,570));root.Arrange(new Rect(0,0,820,570));root.UpdateLayout();var bitmap=new System.Windows.Media.Imaging.RenderTargetBitmap(820,570,96,96,PixelFormats.Pbgra32);bitmap.Render(root);var encoder=new System.Windows.Media.Imaging.PngBitmapEncoder();encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));using(var file=File.Create(Path.Combine(Common.Bin,"client-render.png")))encoder.Save(file);}
+ internal void RenderComponentsImage(bool prepared){activePage="components";snapshot=Common.Map("version",Common.Version,"components",Common.Map("installed",prepared,"prepared",prepared),"layer2Enabled",false);RenderImage();File.Copy(Path.Combine(Common.Bin,"client-render.png"),Path.Combine(Common.Bin,prepared?"components-installed.png":"components-available.png"),true);}
 }
 internal static class SelfTest {
  internal static void Tray(){

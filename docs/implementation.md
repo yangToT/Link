@@ -55,4 +55,4 @@
 
 `NetworkDiscovery.cs` 负责真实物理网卡选择；`Layer2.cs` 和内嵌 PowerShell 负责专属组件调用、虚拟网卡保护和恢复日志；`server/layer2.go` 通过固定证书的本机 JSON-RPC 管理设备授权、角色和会话撤销。管理网页继续内嵌服务端。
 
-此变更保持可选、默认关闭。0.2.0-alpha.1 包含集成代码，运行验证以 validation.md 为准。SoftEther 二进制的固定版本、签名检查、完整安装包，以及两端真实 LAN/TUN 验收仍未完成，不能把本地替身测试记为网络验证。[完整说明](layer2.md)。
+此变更保持可选、默认关闭。0.2.0-alpha.2 包含集成代码和组件准备脚本，固定 SoftEther Stable 4.44 Build 9807，Windows 校验签名。已完成云端管理接口及一台 Windows 组件认证检查，运行验证以 validation.md 为准。尚无包含 SoftEther 的完整安装包，两端真实 LAN/TUN 验收仍未完成。[完整说明](layer2.md)。

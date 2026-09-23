@@ -25,11 +25,12 @@ internal sealed class Agent : ServiceBase {
  Layer2 layer2;Dictionary<string,object> networkReport=Common.Map();
  Process network;ProcessJob job;bool wanted,stopping;string message="未连接";Timer timer;int ticking;DateTime lastGood=DateTime.MinValue;NamedPipeServerStream activePipe;
  internal Agent(){ServiceName="LinkAgent";CanStop=true;AutoLog=false;}
- protected override void OnStart(string[] args){RequestAdditionalTime(120000);Common.ProtectFolder();CleanOwnedRules();job=new ProcessJob();config=Common.Load();layer2=new Layer2();layer2.Recover();networkReport=NetworkDiscovery.Discover(Common.Text(config,"entryAdapterId"));wanted=Common.Bool(config,"autoConnect")&&!Common.Bool(config,"paused")&&Common.Text(config,"token")!="";Task.Run((Action)Serve);timer=new Timer(Tick,null,100,15000);}
+ protected override void OnStart(string[] args){RequestAdditionalTime(120000);Common.ProtectFolder();CleanOwnedRules();job=new ProcessJob();config=Common.Load();layer2=new Layer2();try{if(Common.Bool(config,"layer2Enabled")||File.Exists(Path.Combine(Common.Home,"layer2-journal.json")))Components.ServicesRunning(true);}catch{}layer2.Recover();networkReport=NetworkDiscovery.Discover(Common.Text(config,"entryAdapterId"));wanted=Common.Bool(config,"autoConnect")&&!Common.Bool(config,"paused")&&Common.Text(config,"token")!="";Task.Run((Action)Serve);timer=new Timer(Tick,null,100,15000);}
  protected override void OnStop(){RequestAdditionalTime(120000);stopping=true;if(timer!=null)timer.Dispose();if(activePipe!=null)activePipe.Dispose();lock(gate)StopNetwork();if(job!=null)job.Dispose();}
  void Serve(){while(!stopping){try{
   var acl=new PipeSecurity();acl.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.NetworkSid,null),PipeAccessRights.FullControl,AccessControlType.Deny));
   foreach(var sid in new[]{WellKnownSidType.LocalSystemSid,WellKnownSidType.BuiltinAdministratorsSid})acl.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(sid,null),PipeAccessRights.FullControl,AccessControlType.Allow));
+  var owner=Components.Owner();if(owner!=null)acl.AddAccessRule(new PipeAccessRule(owner,PipeAccessRights.ReadWrite,AccessControlType.Allow));
   using(var pipe=new NamedPipeServerStream("Link.Agent",PipeDirection.InOut,1,PipeTransmissionMode.Byte,PipeOptions.Asynchronous,8192,8192,acl)){
    activePipe=pipe;pipe.WaitForConnection();var read=new StreamReader(pipe,Encoding.UTF8);var write=new StreamWriter(pipe,new UTF8Encoding(false)){AutoFlush=true};
    var readTask=Task.Run(()=>ReadBounded(read));if(!readTask.Wait(10000))continue;
@@ -40,7 +41,15 @@ internal sealed class Agent : ServiceBase {
  static string ReadBounded(TextReader reader){var b=new StringBuilder();int c;while((c=reader.Read())>=0&&c!='\n'){b.Append((char)c);if(b.Length>16384)throw new IOException();}return b.ToString();}
  static string NetworkError(WebException e){var r=e.Response as HttpWebResponse;if(r!=null&&(int)r.StatusCode==403)return "设备未获授权，请联系管理员";return "连接未完成，请检查服务端地址、加入码与网络";}
  Dictionary<string,object> Command(Dictionary<string,object> request){string action=Common.Text(request,"action");
-  if(action=="status")return Common.Map("message",message,"wanted",wanted,"registered",Common.Text(config,"token")!="","autoStart",Common.Bool(config,"autoStart"),"autoConnect",Common.Bool(config,"autoConnect"),"entryAdapterId",Common.Text(config,"entryAdapterId"),"network",Common.Obj(networkReport,"network"),"layer2",layer2.Status,"state",snapshot,"version",Common.Version);
+  if(action=="status")return Common.Map("message",message,"wanted",wanted,"registered",Common.Text(config,"token")!="","autoStart",Common.Bool(config,"autoStart"),"autoConnect",Common.Bool(config,"autoConnect"),"entryAdapterId",Common.Text(config,"entryAdapterId"),"network",Common.Obj(networkReport,"network"),"layer2",layer2.Status,"layer2Enabled",Common.Bool(config,"layer2Enabled"),"components",Components.Inspect(),"componentBusy",Common.Bool(config,"componentBusy"),"componentMessage",Common.Text(config,"componentMessage"),"state",snapshot,"version",Common.Version);
+  if(action=="layer2-enable"||action=="component-maintenance"){
+   bool enable=action=="layer2-enable"&&Common.Bool(request,"enabled");
+   if(enable&&Common.Bool(config,"componentBusy"))throw new InvalidOperationException("请先完成组件安装或修复");
+   if(enable){Components.EnableCheck();config["layer2Enabled"]=true;Common.Save(config);RefreshLayer2();}
+   else{config["layer2Enabled"]=false;Common.Save(config);layer2.Stop();if(Common.Text(layer2.Status,"state")=="cleanup-failed")throw new InvalidOperationException("局域网连接尚未清理完成，保留组件以便恢复");Components.ServicesRunning(false);}
+   if(action=="component-maintenance"){config["componentBusy"]=Common.Bool(request,"busy");config["componentMessage"]=Common.Text(request,"message");Common.Save(config);}
+   Task.Run(()=>Tick(null));return Common.Map("ok",true);
+  }
   if(action=="enroll"){
    if(Common.Text(config,"token")!="")throw new InvalidOperationException("本机已加入网络；更换实例前请卸载并清除本机身份");
    string endpoint=Common.Text(request,"server").Trim().TrimEnd('/'),code=Common.Text(request,"code").Trim();Common.ValidateEndpoint(endpoint);
@@ -69,7 +78,7 @@ internal sealed class Agent : ServiceBase {
  void Pause(string reason){wanted=false;config["paused"]=true;Common.Save(config);StopNetwork();snapshot=Common.Map();message=reason;}
  void Tick(object state){if(Interlocked.Exchange(ref ticking,1)==1)return;try{lock(gate){if(stopping)return;if(!wanted){layer2.Recover();return;}
   try{
-   EnsureEvents();networkReport=NetworkDiscovery.Discover(Common.Text(config,"entryAdapterId"));var local=Common.Parse(Common.Json(networkReport));Common.Obj(local,"network").Remove("adapters");local["layer2"]=layer2.Status;var states=Common.Map();foreach(var id in failedForwards)states[id]="error";
+   EnsureEvents();networkReport=NetworkDiscovery.Discover(Common.Text(config,"entryAdapterId"));var local=Common.Parse(Common.Json(networkReport));Common.Obj(local,"network").Remove("adapters");var lan=new Dictionary<string,object>(layer2.Status);lan["enabled"]=Common.Bool(config,"layer2Enabled");lan["prepared"]=Common.Bool(Components.Inspect(),"prepared");local["layer2"]=lan;var states=Common.Map();foreach(var id in failedForwards)states[id]="error";
    var checks=forwards.Select(item=>new {ID=item.Key,Check=Task.Run(()=>item.Value.Healthy())}).ToArray();Task.WaitAll(checks.Select(c=>(Task)c.Check).ToArray(),2000);foreach(var check in checks)states[check.ID]=check.Check.Status==TaskStatus.RanToCompletion&&check.Check.Result?"ready":"error";
    local["mappingStates"]=states;local["applications"]=Applications();var reply=Common.Api(config,"/agent/heartbeat",local);
    lastGood=DateTime.UtcNow;ApplyState(reply);
@@ -86,10 +95,11 @@ internal sealed class Agent : ServiceBase {
   RefreshLayer2();
  }
  void RefreshLayer2(){
+  if(!Common.Bool(config,"layer2Enabled")||Common.Bool(config,"componentBusy")){layer2.Stop();if(!Common.Bool(config,"componentBusy")&&Common.Text(layer2.Status,"state")!="cleanup-failed"&&!Common.Bool(Components.Inspect(),"foreign"))Components.ServicesRunning(false);return;}
   if(Common.Text(snapshot,"networkMode")=="bridged"){
    try{var plan=Common.Api(config,"/agent/layer2",Common.Map());if(Common.Bool(plan,"enabled"))layer2.Apply(plan,networkReport,Common.Text(config,"server"));else layer2.Stop();}
    catch{layer2.Stop();if(Common.Text(layer2.Status,"state")!="cleanup-failed")layer2.Status=Common.Map("state","blocked","message","局域网接入授权或入口尚未就绪","ip","");}
-  }else layer2.Stop();
+  }else{layer2.Stop();if(Common.Text(layer2.Status,"state")!="cleanup-failed")layer2.Status=Common.Map("state","off","message","本机已允许接入，等待管理端启用局域网模式","ip","");}
  }
  void StartNetwork(string setupKey){
   if(network!=null&&!network.HasExited)return;string executable=Path.Combine(Common.Bin,"netbird.exe");if(!File.Exists(executable))throw new InvalidOperationException("安装包缺少网络组件");

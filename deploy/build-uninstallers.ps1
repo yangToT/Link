@@ -5,7 +5,7 @@ foreach($target in @('client','server')){
  $output=Join-Path $project ('artifacts\'+$target+'-windows-amd64')
  New-Item -ItemType Directory -Path $output -Force | Out-Null
  $script=if($target -eq 'client'){Join-Path $project 'client\uninstall.ps1'}else{Join-Path $PSScriptRoot 'uninstall-windows-server.ps1'}
- $arguments=@('/nologo','/target:winexe','/platform:x64','/optimize+',('/out:'+(Join-Path $output 'Uninstall.exe')),('/win32manifest:'+(Join-Path $project 'client\app.manifest')),('/win32icon:'+(Join-Path $project 'client\assets\Link.ico')),('/resource:'+$script+',Link.Uninstall'),('/reference:'+(Join-Path $framework 'System.Windows.Forms.dll')),('/reference:'+(Join-Path $framework 'System.Core.dll')),('/reference:'+(Join-Path $framework 'System.Security.dll')))
+ $arguments=@('/nologo','/target:winexe','/platform:x64','/optimize+',('/out:'+(Join-Path $output 'Uninstall.exe')),('/win32manifest:'+(Join-Path $project 'client\admin.manifest')),('/win32icon:'+(Join-Path $project 'client\assets\Link.ico')),('/resource:'+$script+',Link.Uninstall'),('/reference:'+(Join-Path $framework 'System.Windows.Forms.dll')),('/reference:'+(Join-Path $framework 'System.Core.dll')),('/reference:'+(Join-Path $framework 'System.Security.dll')))
  if($target -eq 'server'){$arguments+='/define:SERVER'}
  $arguments+=Join-Path $PSScriptRoot 'Uninstaller.cs'
  & (Join-Path $framework 'csc.exe') @arguments

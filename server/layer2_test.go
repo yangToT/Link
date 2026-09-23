@@ -85,7 +85,7 @@ func TestLayer2AuthorizationAndRevocation(t *testing.T) {
 	})
 	a.store.Data.NetworkMode = "bridged"
 	a.store.Data.EntryID = "entry"
-	a.store.Data.Devices = []Device{{ID: "entry", State: "active", Connected: true, LastSeen: time.Now(), LANIP: "192.168.20.2", Networks: []string{"192.168.20.0/24"}, Network: NetworkReport{BridgeEligible: true}}, {ID: "member", State: "active", Connected: true, LastSeen: time.Now(), TokenHash: digest(token)}}
+	a.store.Data.Devices = []Device{{ID: "entry", State: "active", Connected: true, LastSeen: time.Now(), LANIP: "192.168.20.2", Networks: []string{"192.168.20.0/24"}, Layer2: Layer2Status{Enabled: true, Prepared: true}, Network: NetworkReport{BridgeEligible: true}}, {ID: "member", State: "active", Connected: true, LastSeen: time.Now(), TokenHash: digest(token), Layer2: Layer2Status{Enabled: true, Prepared: true}}}
 	w := request(a.public(), "POST", "/agent/layer2", nil, token)
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
@@ -93,6 +93,20 @@ func TestLayer2AuthorizationAndRevocation(t *testing.T) {
 	if strings.Contains(w.Body.String(), a.cfg.Layer2.Password) {
 		t.Fatal("administrator password leaked")
 	}
+	for _, status := range []Layer2Status{{Enabled: false, Prepared: true}, {Enabled: true, Prepared: false}} {
+		a.store.Data.Devices[1].Layer2 = status
+		before := len(calls)
+		response := request(a.public(), "POST", "/agent/layer2", nil, token)
+		if response.Code != 200 || strings.Contains(response.Body.String(), `"password"`) || len(calls) != before {
+			t.Fatal("opted-out or unprepared member received credentials", response.Body.String())
+		}
+	}
+	a.store.Data.Devices[1].Layer2 = Layer2Status{Enabled: true, Prepared: true}
+	a.store.Data.Devices[0].Layer2.Enabled = false
+	if response := request(a.public(), "POST", "/agent/layer2", nil, token); response.Code != 409 {
+		t.Fatal("disabled entry was usable", response.Body.String())
+	}
+	a.store.Data.Devices[0].Layer2.Enabled = true
 	var plan map[string]any
 	json.Unmarshal(w.Body.Bytes(), &plan)
 	if plan["role"] != "member" || plan["password"] != a.cfg.Layer2.credential(&a.store.Data.Devices[1]) {
@@ -141,10 +155,13 @@ func TestLayer2ModeGuardsAndHeartbeat(t *testing.T) {
 	attempt(409)
 	token := secret()
 	a.store.Data.EntryID = "entry"
-	a.store.Data.Devices = []Device{{ID: "entry", State: "active", Connected: true, LastSeen: time.Now(), TokenHash: digest(token), LANIP: "192.168.20.2", Network: NetworkReport{BridgeEligible: true}}}
+	a.store.Data.Devices = []Device{{ID: "entry", State: "active", Connected: true, LastSeen: time.Now(), TokenHash: digest(token), LANIP: "192.168.20.2", Layer2: Layer2Status{Enabled: true, Prepared: true}, Network: NetworkReport{BridgeEligible: true}}}
 	a.store.Data.Mappings = []Mapping{{ID: "old"}}
 	attempt(409)
 	a.store.Data.Mappings = nil
+	a.store.Data.Devices[0].Layer2.Enabled = false
+	attempt(409)
+	a.store.Data.Devices[0].Layer2.Enabled = true
 	attempt(200)
 	w := request(http.HandlerFunc(a.addMapping), "POST", "/", map[string]any{"name": "app", "deviceId": "entry", "port": 8080}, "")
 	if w.Code != 409 {
@@ -166,5 +183,36 @@ func TestRouteCleanupIdempotent(t *testing.T) {
 	b := Backend{URL: s.URL}
 	if e := b.removeRoute("already-removed"); e != nil {
 		t.Fatal(e)
+	}
+}
+
+func TestLayer2OptOutRevokesOnlyDependants(t *testing.T) {
+	a := testApp(t)
+	var revoked []string
+	a.cfg.Layer2 = testLayer2(t, func(method string, p map[string]any) any {
+		if method == "SetUser" {
+			if p["policy:Access_bool"] != false {
+				t.Error("revocation enabled access")
+			}
+			revoked = append(revoked, p["Name_str"].(string))
+		}
+		return map[string]any{}
+	})
+	a.store.Data.NetworkMode = "bridged"
+	a.store.Data.EntryID = "entry"
+	for _, id := range []string{"entry", "member"} {
+		a.store.Data.Devices = append(a.store.Data.Devices, Device{ID: id, State: "active", Connected: true, LastSeen: time.Now(), Network: NetworkReport{BridgeEligible: true}, Layer2: Layer2Status{Enabled: true, Prepared: true}})
+	}
+	a.store.Data.Devices[1].Layer2.Enabled = false
+	a.revokeExpiredLayer2()
+	if strings.Join(revoked, ",") != layer2User("member") {
+		t.Fatal("member opt-out revoked another device", revoked)
+	}
+	revoked = nil
+	a.store.Data.Devices[1].Layer2.Enabled = true
+	a.store.Data.Devices[0].Layer2.Enabled = false
+	a.revokeExpiredLayer2()
+	if len(revoked) != 2 {
+		t.Fatal("entry opt-out left dependant authorization", revoked)
 	}
 }

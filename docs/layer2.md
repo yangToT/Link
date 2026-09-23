@@ -2,7 +2,7 @@
 
 此变更在现有专用网络上增加可选的以太网接入。成员设备获得入口所在局域网的地址，局域网中的其他设备可按该地址访问成员。服务不再逐端口映射，也不由 Link 改写某个 IDE 或业务框架的配置。
 
-**这是默认关闭的实验功能，尚未启用或完成两台 Windows 的真实组网验收。** 0.2.0-alpha.1 包含集成代码，不包含 SoftEther 组件。当前不提供自动安装 SoftEther 驱动和组件的完整分发包；组件版本、签名、许可证、安装和卸载流程验证是分发这些组件前的必做项。
+**这是默认关闭的实验功能，尚未完成两台 Windows 的真实组网验收。** 0.2.0-alpha.2 包含集成代码及组件准备脚本，不包含 SoftEther 二进制组件。组件准备脚本使用官方稳定版 4.44 Build 9807；Windows 载荷必须通过 SoftEther Corporation 的 Authenticode 签名校验。当前尚无包含这些组件的完整发布包。
 
 ## 结构
 
@@ -13,6 +13,20 @@
 - Link 控制账号授权、角色策略、接入配置、撤销与恢复记录。SoftEther 管理员凭据留在各自主机，不发给其他设备。
 
 ## 管理员准备
+
+Windows 客户端打开 **功能与组件 → 局域网接入**，点击“安装组件”。程序下载固定哈希的官方安装包，验证发布者签名，从包中提取签名载荷并完成本机配置。界面正常打开无需管理员权限；首次安装基础组件、安装/修复/卸载可选组件时由 Windows 请求提权。后台管道仅授权安装账户与系统管理员，私有身份文件仍只有 SYSTEM 和管理员能读取。标准账户使用另一管理员凭据首次安装时，当前授权账户为执行安装的管理员；暂不支持多 Windows 用户分别授权。
+
+安装完成默认关闭。点击“启用”表示本机同意参与；还需要管理端选择已启用且组件就绪的有线入口，并启用局域网模式。成员未安装或未启用时不发放二层凭据，基础 Link 连接继续工作。点击“停用”先清理本机二层连接与自有网络规则；“修复”重新准备组件并保持停用；“卸载组件”不会删除设备身份、基础后台服务或 NetBird。入口停用会使依赖它的局域网访问中断，服务端停止签发并周期性撤销对应授权。旧客户端未报告主动启用状态时，视为未启用。
+
+下面的脚本用于服务器部署和排障，普通客户端用户无需手工执行。
+
+已准备并核验 Linux 二进制后，可运行 `python3 /ROOT/Link/deploy/configure-layer2.py`。脚本只接受 Link 专属目录，先配置端口隔离，再启动 `link-layer2`、验证真实管理接口并更新控制配置；只重启 `link-server`，保留原接入模式。安装失败保存现场并回退控制配置与防火墙规则。服务初始密码使用 SoftEther 配置格式要求的 SHA-0，不能使用 SHA-1 代替；API 请求仍通过 HTTPS 传递独立随机密码。
+
+Windows 可对已从官方签名安装包提取的 `client-portable/`、`bridge-portable/` 目录运行 `client/install-layer2.ps1 -ComponentSource <目录>`。它校验签名、拒绝已有共享组件、保存 DPAPI 凭据并验证 Client/Bridge 本机管理接口，不创建成员虚拟网卡或办公网卡桥接。组件使用独立目录及有归属记录的防火墙规则。该脚本不等同于驱动与跨机接入验收。
+
+本机组件管理采用非交互命令及超时限制，Bridge 使用服务管理员认证后选择 `BRIDGE`，命令输入文件使用无 BOM 的 UTF-8。准备后可用管理员权限运行 `Link.exe --layer2-check`；失败会返回非零退出码并在程序目录生成 `startup-error.txt`，不会启动连接。
+
+SoftEther 启动时可能安装 SeLow 抓包协议驱动并绑定网卡，这与创建以太网桥接不同。安装脚本记录安装前后的驱动和驱动包清单。卸载只清理本次新增的 SeLow；发现其他 SoftEther 服务时保留共享驱动，驱动包需与记录中的名称、路径、提供方、版本一致才删除。使用 Windows 的 [netcfg /u](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/netcfg) 和 [PnPUtil /delete-driver](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/pnputil-command-syntax)，不执行全网卡重置、强制删包或自动重启。清理失败保留安装目录和恢复记录。
 
 服务端在 `/ROOT/Link` 下另设 `softether/`，准备支持官方 JSON-RPC 的 SoftEther Server。关闭 SecureNAT、虚拟 DHCP、VPN Azure、动态 DNS、IPsec、OpenVPN、SSTP 等不使用的功能，不复用已有 VPN HUB 或账号。单独建立 `LINK` HUB，设置至少 20 字符的随机管理密码和独立服务器证书。上游版本和二进制哈希在真实部署前固定；不能将“调用接口已编译”视为组件兼容性验收。
 

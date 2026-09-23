@@ -40,9 +40,11 @@ type NetworkReport struct {
 	Warning        string `json:"warning"`
 }
 type Layer2Status struct {
-	State   string `json:"state"`
-	Message string `json:"message"`
-	IP      string `json:"ip"`
+	Enabled  bool   `json:"enabled"`
+	Prepared bool   `json:"prepared"`
+	State    string `json:"state"`
+	Message  string `json:"message"`
+	IP       string `json:"ip"`
 }
 
 var safeHub = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
@@ -176,12 +178,12 @@ func (a *App) layer2Plan(w http.ResponseWriter, r *http.Request) {
 		failure(w, 403, "设备未获授权")
 		return
 	}
-	if a.store.Data.NetworkMode != "bridged" {
+	if a.store.Data.NetworkMode != "bridged" || !d.Layer2.Enabled || !d.Layer2.Prepared {
 		writeJSON(w, 200, map[string]any{"enabled": false})
 		return
 	}
 	entry := a.store.device(a.store.Data.EntryID)
-	if entry == nil || !publicDevice(*entry).Connected || !entry.Network.BridgeEligible || !privateIP(entry.LANIP) {
+	if entry == nil || !publicDevice(*entry).Connected || !entry.Network.BridgeEligible || !entry.Layer2.Enabled || !entry.Layer2.Prepared || !privateIP(entry.LANIP) {
 		failure(w, 409, "有线入口不可用")
 		return
 	}
@@ -219,8 +221,8 @@ func (a *App) networkMode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		entry := a.store.device(a.store.Data.EntryID)
-		if entry == nil || !publicDevice(*entry).Connected || !entry.Network.BridgeEligible {
-			failure(w, 409, "请先选择可用的有线入口")
+		if entry == nil || !publicDevice(*entry).Connected || !entry.Network.BridgeEligible || !entry.Layer2.Enabled || !entry.Layer2.Prepared {
+			failure(w, 409, "请先在有线入口客户端安装并启用局域网接入")
 			return
 		}
 		if len(a.store.Data.Mappings) > 0 {
@@ -290,12 +292,13 @@ func (a *App) revokeExpiredLayer2() {
 		return
 	}
 	entry := a.store.device(a.store.Data.EntryID)
-	entryOK := entry != nil && publicDevice(*entry).Connected && entry.Network.BridgeEligible
+	entryOK := entry != nil && publicDevice(*entry).Connected && entry.Network.BridgeEligible && entry.Layer2.Enabled && entry.Layer2.Prepared
 	for i := range a.store.Data.Devices {
 		d := &a.store.Data.Devices[i]
-		if !entryOK || !publicDevice(*d).Connected {
+		if !entryOK || !publicDevice(*d).Connected || !d.Layer2.Enabled || !d.Layer2.Prepared {
 			if e := a.cfg.Layer2.revoke(d, d.ID == a.store.Data.EntryID); e != nil {
-				d.Layer2 = Layer2Status{State: "blocked", Message: "二层撤销待重试"}
+				d.Layer2.State = "blocked"
+				d.Layer2.Message = "二层撤销待重试"
 				return
 			}
 		}

@@ -160,7 +160,9 @@ func publicDevice(d Device) Device {
 	d.PeerID = ""
 	d.Connected = d.Connected && d.State == "active" && time.Since(d.LastSeen) < 35*time.Second
 	if !d.Connected && d.Layer2.State != "" {
-		d.Layer2 = Layer2Status{State: "off", Message: "设备离线，局域网状态待确认"}
+		d.Layer2.State = "off"
+		d.Layer2.Message = "设备离线，局域网状态待确认"
+		d.Layer2.IP = ""
 	}
 	return d
 }

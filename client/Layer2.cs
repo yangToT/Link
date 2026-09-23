@@ -38,9 +38,11 @@ internal sealed class Layer2 {
   string password=Common.Text(config,entry?"bridgePassword":"clientPassword");if(password.Length<20)throw new InvalidOperationException("二层本机管理凭据尚未配置");
   string input=Path.Combine(Common.Home,"layer2-command-"+Guid.NewGuid().ToString("N")+".txt");
   // Device credentials go in this SYSTEM/Administrators-only temporary input, never command arguments.
-  File.WriteAllText(input,command+"\r\nexit\r\n",new UTF8Encoding(true));
-  try{return Common.Run(exe,"127.0.0.1"+(entry?":5555 /SERVER":" /CLIENT")+" /PASSWORD:"+Common.Quote(password)+(entry?" /HUB:BRIDGE":"")+" /IN:"+Common.Quote(input),12000,cleanup?new[]{29,36,37,61,76}:new int[0]);}finally{File.Delete(input);}
+  // vpncmd treats a UTF-8 BOM as part of the first command name.
+  File.WriteAllText(input,command+"\r\nexit\r\n",new UTF8Encoding(false));
+  try{return Common.Run(exe,"127.0.0.1"+(entry?":5555 /SERVER":" /CLIENT")+" /PROGRAMMING /PASSWORD:"+Common.Quote(password)+(entry?" /ADMINHUB:BRIDGE":"")+" /IN:"+Common.Quote(input),12000,cleanup?new[]{29,36,37,61,76}:new int[0]);}finally{File.Delete(input);}
  }
+ internal static void CheckComponents(){var config=LocalConfig();ExecuteCli(config,false,"AccountList",false);ExecuteCli(config,true,"CascadeList",false);}
  static string Shell(Dictionary<string,object> payload){
   string request=Path.Combine(Common.Home,"layer2-request-"+Guid.NewGuid().ToString("N")+".json");
   string script=Path.Combine(Common.Home,"layer2-network.ps1");
