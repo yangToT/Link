@@ -50,6 +50,13 @@ internal static class Layer2Tests {
    if(!layer.WaitForTransport("test",100)||!layer.WaitForTransport("test",100+29L*System.Diagnostics.Stopwatch.Frequency)||layer.WaitForTransport("test",100+31L*System.Diagnostics.Stopwatch.Frequency))throw new Exception("Transport grace is not bounded");
    if(commands.Count!=count||!File.Exists(file))throw new Exception("Transient route loss destroyed existing identity");
    layer.Stop();if(File.Exists(file))throw new Exception("Expired transport not cleaned up");
+   File.WriteAllText(file,Common.Json(Common.Map("account","Link-ABCDEF012345","nic","VPN127","role","member")));
+   layer=new Layer2(directory,()=>Common.Map(),cli,p=>Common.Json(Common.Map("waiting","lan-route","actualInterface",6,"expectedInterface",11,"prefix","0.0.0.0/0","routeOwned",true)));
+   var method=typeof(Layer2).GetMethod("Guard",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance);
+   try{method.Invoke(layer,new object[]{"check"});throw new Exception("LAN transition accepted as ready");}
+   catch(System.Reflection.TargetInvocationException error){if(!(error.InnerException is TransportPending)||!error.InnerException.Message.Contains("当前网卡 6")||!error.InnerException.Message.Contains("期望网卡 11")||error.InnerException.Message.Contains("TUN"))throw;}
+   if(!Common.Bool(Common.Parse(File.ReadAllText(file)),"routeOwned")||!File.Exists(Path.Combine(directory,"layer2-last-error.json")))throw new Exception("Pending route lost ownership or diagnostics");
+   File.Delete(file);
    foreach(int code in new[]{30,32,31}){
     File.WriteAllText(file,Common.Json(Common.Map("account","Link-ABCDEF012345","nic","VPN127","role","member")));
     var called=new List<string>();

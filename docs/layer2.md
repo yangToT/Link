@@ -97,3 +97,5 @@ node .\server\web\check.cjs
 上游依据：[本地桥接](https://www.softether.org/4-docs/1-manual/3/3.6)、[JSON-RPC 接口](https://github.com/SoftEtherVPN/SoftEtherVPN/blob/master/developer_tools/vpnserver-jsonrpc-clients/README.md)、[Windows TUN 严格路由](https://sing-box.sagernet.org/configuration/inbound/tun/)。
 
 alpha.10 对专用路由暂时重连提供最长 30 秒恢复等待，期间保留已有网卡，超时清理。服务端返回独立的等待状态且不续发凭据，身份撤销仍立即进入清理。最近失败原因随复制诊断输出。
+
+alpha.11 将最长 30 秒恢复等待扩展到取址后的局域网路由，等待期间不重建网卡。界面和复制诊断报告实际/期望网卡及路由；没有证据时不归因于代理 TUN。持续冲突依然清理，不会改写其他网卡的路由优先级。

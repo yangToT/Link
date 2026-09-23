@@ -80,7 +80,7 @@ internal static class Components {
   message=System.Text.RegularExpressions.Regex.Replace(message,@"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b","[地址]");
   if(System.Text.RegularExpressions.Regex.IsMatch(message,@"(?i)password|token|secret|credential"))message="[敏感字段已省略]";
   lines.Add("当前接入结果："+message);
-  string previous=Path.Combine(Common.Home,"layer2-last-error.json");if(File.Exists(previous))try{var error=Common.Parse(File.ReadAllText(previous));string detail=Common.Text(error,"message");detail=System.Text.RegularExpressions.Regex.Replace(detail,@"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b","[地址]");if(System.Text.RegularExpressions.Regex.IsMatch(detail,@"(?i)password|token|secret|credential"))detail="[敏感字段已省略]";lines.Add("最近一次接入失败（UTC "+Common.Text(error,"time")+"）："+detail);}catch{}
+  string previous=Path.Combine(Common.Home,"layer2-last-error.json");if(File.Exists(previous))try{var error=Common.Parse(File.ReadAllText(previous));string detail=Common.Text(error,"message");detail=System.Text.RegularExpressions.Regex.Replace(detail,@"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b","[地址]");if(System.Text.RegularExpressions.Regex.IsMatch(detail,@"(?i)password|token|secret|credential"))detail="[敏感字段已省略]";lines.Add("最近一次网络异常（UTC "+Common.Text(error,"time")+"）："+detail);}catch{}
   lines.Add("以下为历史组件安装日志，不代表当前连接状态：");
   string file=Path.Combine(Common.Home,"component-install.log");
   if(File.Exists(file)){

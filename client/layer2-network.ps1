@@ -40,9 +40,9 @@ if($p.action -eq 'pin'){
 }
 $best=Find-NetRoute -RemoteIPAddress $ip.ToString() | Where-Object {$_.PSObject.Properties['DestinationPrefix']} | Select-Object -First 1
 if(-not $best -or $best.InterfaceIndex -ne $physical.ifIndex){throw 'TUN intercepts the Link transport endpoint'}
-$overlay=Find-NetRoute -RemoteIPAddress $p.overlayEndpoint | Where-Object {$_.PSObject.Properties['DestinationPrefix']} | Select-Object -First 1
+$overlay=Find-NetRoute -RemoteIPAddress $p.overlayEndpoint -ErrorAction SilentlyContinue | Where-Object {$_.PSObject.Properties['DestinationPrefix']} | Select-Object -First 1
 $link=Get-NetAdapter -IncludeHidden | Where-Object {$_.Name -eq 'Link0'}
-if(-not $link -or -not $overlay -or $overlay.InterfaceIndex -ne $link.ifIndex){@{waiting='Private network route is recovering'} | ConvertTo-Json -Compress;exit}
+if(-not $link -or -not $overlay -or $overlay.InterfaceIndex -ne $link.ifIndex){@{waiting='overlay';actualInterface=$overlay.InterfaceIndex;expectedInterface=$link.ifIndex;prefix=$overlay.DestinationPrefix;routeOwned=$ownedRoute} | ConvertTo-Json -Compress;exit}
 if($p.role -eq 'member' -and $p.action -ne 'pin'){
  $virtual=Get-NetAdapter -IncludeHidden | Where-Object {$_.InterfaceDescription -eq ('VPN Client Adapter - '+$p.nic)}
  if(-not $virtual){throw 'Owned virtual adapter unavailable'}
@@ -78,8 +78,10 @@ if($p.role -eq 'member' -and $p.action -ne 'pin'){
     $existing=@(Get-NetRoute -InterfaceIndex $virtual.ifIndex -DestinationPrefix $network -ErrorAction SilentlyContinue)
     if($existing.Count -eq 0){New-NetRoute -DestinationPrefix $network -InterfaceIndex $virtual.ifIndex -NextHop $p.remoteGateway -RouteMetric 5 -PolicyStore ActiveStore | Out-Null}
    }
-   $lan=Find-NetRoute -RemoteIPAddress $p.remoteGateway | Where-Object {$_.PSObject.Properties['DestinationPrefix']} | Select-Object -First 1
-   if(-not $lan -or $lan.InterfaceIndex -ne $virtual.ifIndex){throw 'TUN intercepts the remote LAN route'}
+   $lan=Find-NetRoute -RemoteIPAddress $p.remoteGateway -ErrorAction SilentlyContinue | Where-Object {$_.PSObject.Properties['DestinationPrefix']} | Select-Object -First 1
+   if(-not $lan -or $lan.InterfaceIndex -ne $virtual.ifIndex){
+    @{waiting='lan-route';actualInterface=$lan.InterfaceIndex;expectedInterface=$virtual.ifIndex;prefix=$lan.DestinationPrefix;routeOwned=$ownedRoute} | ConvertTo-Json -Compress;exit
+   }
   }
  }
 }
