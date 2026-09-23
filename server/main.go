@@ -233,6 +233,7 @@ func (a *App) public() http.Handler {
 	})
 	mux.HandleFunc("POST /agent/enroll", a.enroll)
 	mux.HandleFunc("POST /agent/reconnect", a.reconnect)
+	mux.HandleFunc("POST /agent/disconnect", a.disconnect)
 	mux.HandleFunc("POST /agent/heartbeat", a.heartbeat)
 	mux.HandleFunc("GET /agent/events", a.agentEvents)
 	mux.HandleFunc("POST /agent/browser-ticket", a.browserTicket)
@@ -610,6 +611,9 @@ func (a *App) deviceAction(w http.ResponseWriter, r *http.Request, self string) 
 		return
 	}
 	switch req.Action {
+	case "delete":
+		a.deleteDevice(w, d, self)
+		return
 	case "entry":
 		if !d.Connected || d.State != "active" || d.PeerID == "" || len(d.Networks) == 0 {
 			failure(w, 409, "设备需要在线并报告可用的本地网络")

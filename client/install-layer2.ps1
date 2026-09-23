@@ -137,5 +137,5 @@ declare root
   $owned | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $journal -Encoding UTF8
  }
  foreach($name in $created){Stop-Service $name -ErrorAction SilentlyContinue;Set-Service $name -StartupType Manual -ErrorAction SilentlyContinue}
- Log ('FAILED: '+$_.Exception.Message);exit 1
+ Log ('FAILED: '+$_.Exception.Message);throw
 }finally{$clientPassword=$null;$bridgePassword=$null}

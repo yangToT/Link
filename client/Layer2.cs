@@ -21,8 +21,17 @@ internal sealed class Layer2 {
  internal Dictionary<string,object> Status=Common.Map("state","off","message","未启用局域网接入","ip","");
  internal Layer2():this(Common.Home,LocalConfig,ExecuteCli,Shell){}
  internal Layer2(string directory,Func<Dictionary<string,object>> config,Func<Dictionary<string,object>,bool,string,bool,string> cli,Func<Dictionary<string,object>,string> guard){journal=Path.Combine(directory,"layer2-journal.json");loadConfig=config;command=cli;shell=guard;if(File.Exists(journal))owned=Common.Parse(File.ReadAllText(journal));}
- string Cli(Dictionary<string,object> config,bool entry,string text,bool cleanup=false){return command(config,entry,text,cleanup);}
+ string Cli(Dictionary<string,object> config,bool entry,string text,bool cleanup=false){try{return command(config,entry,text,cleanup);}catch(Exception error){throw new InvalidOperationException("二层操作 "+text.Split(' ')[0]+"："+error.Message);}}
  internal static string Atom(string s){if(!Regex.IsMatch(s??"","^[A-Za-z0-9_-]{1,80}$"))throw new InvalidOperationException("二层组件参数无效");return s;}
+ internal static string BridgeDevice(string description,string adapterID,string listing){
+  Guid guid;if(!Guid.TryParse(adapterID,out guid))throw new InvalidOperationException("物理网卡标识无效");
+  // SoftEther Stable BridgeWin32.c: SHA-1 of uppercase brace-form GUID, first 32 bits big endian.
+  byte[] hash;using(var sha=SHA1.Create())hash=sha.ComputeHash(Encoding.ASCII.GetBytes(guid.ToString("B").ToUpperInvariant()));
+  uint id=((uint)hash[0]<<24)|((uint)hash[1]<<16)|((uint)hash[2]<<8)|hash[3];if(id==0)id=1;
+  string expected=description+" (ID="+id.ToString("D10",System.Globalization.CultureInfo.InvariantCulture)+")";
+  if(!listing.Split('\n').SelectMany(line=>line.Split('|')).Any(cell=>cell.Trim()==expected))throw new InvalidOperationException("桥接组件未报告所选物理网卡，请修复组件后重试");
+  return expected;
+ }
  internal static Dictionary<string,object> LocalConfig(){
   string path=Path.Combine(Common.Home,"layer2-local.bin");if(!File.Exists(path))throw new InvalidOperationException("尚未安装和配置二层接入组件");
   return Common.Parse(Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(path),null,DataProtectionScope.LocalMachine)));
@@ -80,11 +89,11 @@ internal sealed class Layer2 {
      var physical=NetworkDiscovery.Read().Single(a=>a.ID==Common.Text(owned,"adapterId")&&a.Physical&&a.Up&&a.Kind=="ethernet");
      if(NetworkDiscovery.Read().Count(a=>a.Description==physical.Description)!=1||Cli(cfg,true,"BridgeList").Contains(physical.Description))throw new InvalidOperationException("网卡桥接归属不明确，拒绝修改现有桥接");
      // A bridge is anchored to the hardware description, not a renameable TUN display name.
-     owned["bridgeDevice"]=physical.Description;Save();
+     owned["bridgeDevice"]=BridgeDevice(physical.Description,physical.ID,Cli(cfg,true,"BridgeDeviceList"));Save();
      owned["accountCreated"]=true;Save();Cli(cfg,true,"CascadeCreate "+name+" /SERVER:"+Common.Quote(Common.Text(plan,"endpoint"))+" /HUB:"+Atom(Common.Text(plan,"hub"))+" /USERNAME:"+Atom(Common.Text(plan,"username")));
      Cli(cfg,true,"CascadePasswordSet "+name+" /PASSWORD:"+Atom(Common.Text(plan,"password"))+" /TYPE:standard");
      Cli(cfg,true,"CascadeServerCertSet "+name+" /LOADCERT:"+Common.Quote(cert));Cli(cfg,true,"CascadeServerCertEnable "+name);
-     owned["bridgeCreated"]=true;Save();Cli(cfg,true,"BridgeCreate BRIDGE /DEVICE:"+Common.Quote(physical.Description)+" /TAP:no");
+     owned["bridgeCreated"]=true;Save();Cli(cfg,true,"BridgeCreate BRIDGE /DEVICE:"+Common.Quote(Common.Text(owned,"bridgeDevice"))+" /TAP:no");
      Cli(cfg,true,"CascadeOnline "+name);
     }else{
      owned["nicCreated"]=true;Save();Cli(cfg,false,"NicCreate "+nic);Guard("prepare");

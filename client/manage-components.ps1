@@ -37,7 +37,6 @@ public static class LinkPayload {
 try{
  if($Action -eq 'remove'){
   & (Join-Path $PSScriptRoot 'uninstall.ps1') -Layer2Only
-  if($LASTEXITCODE -ne 0){throw 'Component removal failed'}
   Log 'SUCCESS: components removed';return
  }
  $cache=if($Action -eq 'extract-test'){$Source}else{Join-Path $data 'component-downloads'}
@@ -74,7 +73,6 @@ try{
  if($Action -eq 'extract-test'){Log 'PASS: pinned installer hashes, publisher signatures, bounded resource extraction and signed payloads';return}
  if($Action -eq 'repair' -and (Test-Path -LiteralPath $root)){& (Join-Path $PSScriptRoot 'uninstall.ps1') -Layer2Only -KeepComponentCache}
  & (Join-Path $PSScriptRoot 'install-layer2.ps1') -ComponentSource $cache -Report $report
- if($LASTEXITCODE -ne 0){throw 'Component preparation failed'}
  foreach($name in @('SEVPNCLIENT','SEVPNBRIDGE')){Set-Service $name -StartupType Manual;Stop-Service $name}
  Log 'SUCCESS: installed; feature remains disabled'
 }catch{Log ('FAILED: '+$_.Exception.Message);exit 1}

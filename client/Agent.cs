@@ -22,7 +22,7 @@ internal sealed class Agent : ServiceBase {
  readonly HashSet<string> failedForwards=new HashSet<string>();
  readonly HashSet<string> localRules=new HashSet<string>();
  EventStream events;int eventGeneration;readonly StateOrder stateOrder=new StateOrder();
- Layer2 layer2;Dictionary<string,object> networkReport=Common.Map();
+ bool shutdownRequested;Layer2 layer2;Dictionary<string,object> networkReport=Common.Map();
  Process network;ProcessJob job;bool wanted,stopping;string message="未连接";Timer timer;int ticking;DateTime lastGood=DateTime.MinValue;NamedPipeServerStream activePipe;
  internal Agent(){ServiceName="LinkAgent";CanStop=true;AutoLog=false;}
  protected override void OnStart(string[] args){RequestAdditionalTime(120000);Common.ProtectFolder();CleanOwnedRules();job=new ProcessJob();config=Common.Load();layer2=new Layer2();try{if(Common.Bool(config,"layer2Enabled")||File.Exists(Path.Combine(Common.Home,"layer2-journal.json")))Components.ServicesRunning(true);}catch{}layer2.Recover();networkReport=NetworkDiscovery.Discover(Common.Text(config,"entryAdapterId"));wanted=Common.Bool(config,"autoConnect")&&!Common.Bool(config,"paused")&&Common.Text(config,"token")!="";Task.Run((Action)Serve);timer=new Timer(Tick,null,100,15000);}
@@ -36,16 +36,18 @@ internal sealed class Agent : ServiceBase {
    var readTask=Task.Run(()=>ReadBounded(read));if(!readTask.Wait(10000))continue;
    Dictionary<string,object> result;try{lock(gate)result=Command(Common.Parse(readTask.Result));}catch(WebException e){result=Common.Map("error",NetworkError(e));}catch(Exception e){result=Common.Map("error",e is InvalidOperationException?e.Message:"操作未完成，请检查后台服务");}
    write.WriteLine(Common.Json(result));
+   if(shutdownRequested){Stop();return;}
   }
  }catch{if(!stopping)Thread.Sleep(200);}}}
  static string ReadBounded(TextReader reader){var b=new StringBuilder();int c;while((c=reader.Read())>=0&&c!='\n'){b.Append((char)c);if(b.Length>16384)throw new IOException();}return b.ToString();}
  static string NetworkError(WebException e){var r=e.Response as HttpWebResponse;if(r!=null&&(int)r.StatusCode==403)return "设备未获授权，请联系管理员";return "连接未完成，请检查服务端地址、加入码与网络";}
  Dictionary<string,object> Command(Dictionary<string,object> request){string action=Common.Text(request,"action");
+  if(action=="component-diagnostics")return Common.Map("text",Components.Diagnostics());
   if(action=="status")return Common.Map("message",message,"wanted",wanted,"registered",Common.Text(config,"token")!="","autoStart",Common.Bool(config,"autoStart"),"autoConnect",Common.Bool(config,"autoConnect"),"entryAdapterId",Common.Text(config,"entryAdapterId"),"network",Common.Obj(networkReport,"network"),"layer2",layer2.Status,"layer2Enabled",Common.Bool(config,"layer2Enabled"),"components",Components.Inspect(),"componentBusy",Common.Bool(config,"componentBusy"),"componentMessage",Common.Text(config,"componentMessage"),"state",snapshot,"version",Common.Version);
   if(action=="layer2-enable"||action=="component-maintenance"){
    bool enable=action=="layer2-enable"&&Common.Bool(request,"enabled");
    if(enable&&Common.Bool(config,"componentBusy"))throw new InvalidOperationException("请先完成组件安装或修复");
-   if(enable){Components.EnableCheck();config["layer2Enabled"]=true;Common.Save(config);RefreshLayer2();}
+   if(enable){Components.EnableCheck();config["layer2Enabled"]=true;config["componentMessage"]="组件校验通过，局域网接入已启用";Common.Save(config);RefreshLayer2();}
    else{config["layer2Enabled"]=false;Common.Save(config);layer2.Stop();if(Common.Text(layer2.Status,"state")=="cleanup-failed")throw new InvalidOperationException("局域网连接尚未清理完成，保留组件以便恢复");Components.ServicesRunning(false);}
    if(action=="component-maintenance"){config["componentBusy"]=Common.Bool(request,"busy");config["componentMessage"]=Common.Text(request,"message");Common.Save(config);}
    Task.Run(()=>Tick(null));return Common.Map("ok",true);
@@ -64,9 +66,18 @@ internal sealed class Agent : ServiceBase {
   }
   if(action=="connect"){
    if(Common.Text(config,"token")=="")throw new InvalidOperationException("请先加入网络");var reply=Common.Api(config,"/agent/reconnect",Common.Map());
-   StopNetwork();config["paused"]=false;Common.Save(config);wanted=true;StartNetwork(Common.Text(reply,"setupKey"));EnsureEvents();message="正在连接";return Common.Map("ok",true);
+   StopNetwork();if(Common.Bool(config,"layer2Enabled"))Components.EnableCheck();config["paused"]=false;Common.Save(config);wanted=true;StartNetwork(Common.Text(reply,"setupKey"));EnsureEvents();message="正在连接";return Common.Map("ok",true);
   }
-  if(action=="disconnect"){Pause("已断开");return Common.Map("ok",true);}
+  if(action=="disconnect"||action=="shutdown"){
+   if(Common.Bool(config,"componentBusy"))throw new InvalidOperationException("组件维护中，请等待操作完成后退出");
+   // Report voluntary departure before stopping the overlay; offline servers must not prevent local cleanup.
+   try{if(Common.Text(config,"token")!="")Common.Api(config,"/agent/disconnect",Common.Map());}catch{}
+   Pause("已断开");
+   if(Common.Text(layer2.Status,"state")=="cleanup-failed")throw new InvalidOperationException(Common.Text(layer2.Status,"message"));
+   if(!Common.Bool(Components.Inspect(),"foreign"))Components.ServicesRunning(false);
+   if(action=="shutdown")shutdownRequested=true;
+   return Common.Map("ok",true);
+  }
   if(action=="settings"){
    string adapter=Common.Text(request,"entryAdapterId");if(adapter!=""&&!NetworkDiscovery.Read().Any(n=>n.Physical&&n.ID==adapter))throw new InvalidOperationException("请选择本机物理网卡");
    config["entryAdapterId"]=adapter;layer2.Stop();networkReport=NetworkDiscovery.Discover(adapter);

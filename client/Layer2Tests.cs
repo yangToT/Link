@@ -6,6 +6,10 @@ using System.Linq;
 namespace Link {
 internal static class Layer2Tests {
  internal static void Run(){
+  string expected="Test Ethernet (ID=2814777680)";
+  if(Layer2.BridgeDevice("Test Ethernet","{11111111-1111-1111-1111-111111111111}","Device Name|"+expected+"\r\n")!=expected)throw new Exception("SoftEther adapter ID mismatch");
+  bool refused=false;try{Layer2.BridgeDevice("Test Ethernet","{22222222-2222-2222-2222-222222222222}",expected);}catch(InvalidOperationException){refused=true;}if(!refused)throw new Exception("Wrong physical adapter accepted");
+
   var plan=Common.Map("hub","LINK","username","link-test","password",new string('a',64),"endpoint","100.88.0.1:24448","role","member","networks",new[]{"192.168.20.0/24"});
   var local=Common.Map("network",Common.Map("adapterId","physical","bridgeEligible",false),"networks",new[]{"192.168.20.0/23"});
   Reject(plan,local,"重叠");plan["role"]="entry";Reject(plan,local,"有线");
