@@ -34,3 +34,5 @@ jobs:
           ./client/build.ps1 -Check
           ./artifacts/client-windows-amd64/Link.Check.exe --self-test
           if ($LASTEXITCODE -ne 0) { throw 'Windows self-test failed' }
+          ./artifacts/client-windows-amd64/Link.Check.exe --interaction-test
+          if ($LASTEXITCODE -ne 0) { throw 'Windows interaction test failed' }

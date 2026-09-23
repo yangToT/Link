@@ -25,6 +25,7 @@ internal static class Program {
   if(args.Contains("--job-child")){System.Threading.Thread.Sleep(30000);return;}
   if(args.Contains("--service")){ServiceBase.Run(new Agent());return;}
   if(args.Contains("--self-test")){SelfTest.Run();return;}
+  if(args.Contains("--interaction-test")){MainWindow.TestInteractions();return;}
   if(args.Contains("--tray-test")){SelfTest.Tray();return;}
   if(args.Contains("--network-check")){Console.WriteLine(Common.Json(NetworkDiscovery.Discover("")));return;}
   if(args.Contains("--layer2-check")){Layer2.CheckComponents();Console.WriteLine("PASS: authenticated local Client and Bridge management; no connections created");return;}
@@ -79,10 +80,12 @@ internal static class Program {
   }
  }
 }
-internal sealed class MainWindow : Window {
+internal sealed partial class MainWindow : Window {
  readonly bool preview;readonly StackPanel body=new StackPanel();readonly TextBlock status=new TextBlock(),entry=new TextBlock(),feedback=new TextBlock();readonly Border entryBox=new Border();
  readonly Button connection=new Button(),management=new Button();readonly TextBox server=new TextBox(),code=new TextBox();readonly CheckBox autoStart=new CheckBox(),autoConnect=new CheckBox();
- Dictionary<string,object> snapshot=Common.Map();bool busy,openOnConnect,refreshing;string activePage="devices";DispatcherTimer timer;
+ Dictionary<string,object> snapshot=Common.Map();bool busy,openOnConnect,refreshing,actionPending;string activePage="devices";DispatcherTimer timer;
+ readonly ProgressBar actionProgress=new ProgressBar{Height=3,IsIndeterminate=true,Visibility=Visibility.Collapsed,Margin=new Thickness(0,3,0,5)};
+ readonly StackPanel navigation=new StackPanel();readonly Dictionary<string,Button> pageButtons=new Dictionary<string,Button>();
  System.Windows.Forms.NotifyIcon tray;System.Drawing.Icon trayIcon;System.Windows.Forms.ToolStripMenuItem trayManagement;bool exiting,notified;WindowState restoredState=WindowState.Normal;
  readonly Brush ink=new SolidColorBrush(Color.FromRgb(35,46,51)),muted=new SolidColorBrush(Color.FromRgb(110,120,125)),accent=new SolidColorBrush(Color.FromRgb(34,113,92));
  internal MainWindow(bool isPreview){
@@ -93,14 +96,14 @@ internal sealed class MainWindow : Window {
   var rail=new DockPanel{Margin=new Thickness(22,28,18,20)};Grid.SetColumn(rail,0);root.Children.Add(rail);
   var brand=new TextBlock{Text="Link",FontSize=27,FontWeight=FontWeights.SemiBold,Margin=new Thickness(8,0,0,32)};DockPanel.SetDock(brand,Dock.Top);rail.Children.Add(brand);
   var foot=new TextBlock{Text="SELF-HOSTED\n"+Common.Version,Foreground=muted,FontSize=10,LineHeight=19,Margin=new Thickness(8)};DockPanel.SetDock(foot,Dock.Bottom);rail.Children.Add(foot);
-  var navigation=new StackPanel();rail.Children.Add(navigation);
-  foreach(var page in new[]{new[]{"devices","设备"},new[]{"services","服务"},new[]{"components","功能与组件"},new[]{"settings","设置"}}){string key=page[0];var b=Button(page[1],()=>{activePage=key;Render();});b.HorizontalContentAlignment=HorizontalAlignment.Left;b.Margin=new Thickness(0,3,0,3);navigation.Children.Add(b);}
+  rail.Children.Add(navigation);
+  foreach(var page in new[]{new[]{"devices","设备"},new[]{"services","服务"},new[]{"components","功能与组件"},new[]{"settings","设置"}}){string key=page[0];var b=Button(page[1],()=>{activePage=key;Render();});b.HorizontalContentAlignment=HorizontalAlignment.Left;b.Margin=new Thickness(0,3,0,3);navigation.Children.Add(b);pageButtons[key]=b;}
   var main=new Grid{Margin=new Thickness(16,28,30,22)};Grid.SetColumn(main,1);root.Children.Add(main);main.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});main.RowDefinitions.Add(new RowDefinition{Height=new GridLength(1,GridUnitType.Star)});main.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
-  var top=new DockPanel{Margin=new Thickness(0,0,0,20)};main.Children.Add(top);connection.Content="连接";StyleButton(connection);connection.Click+=async(s,e)=>await Connect();DockPanel.SetDock(connection,Dock.Right);top.Children.Add(connection);
+  var top=new DockPanel{Margin=new Thickness(0,0,0,20)};main.Children.Add(top);connection.Content="连接";StyleButton(connection);connection.Click+=async(s,e)=>await RunAction(connection,Connect);DockPanel.SetDock(connection,Dock.Right);top.Children.Add(connection);
   var headline=new StackPanel();headline.Children.Add(new TextBlock{Text="我的网络",FontSize=22,FontWeight=FontWeights.SemiBold});status.Text="未连接";status.Foreground=muted;status.Margin=new Thickness(0,7,0,0);headline.Children.Add(status);top.Children.Add(headline);
   var scroll=new ScrollViewer{VerticalScrollBarVisibility=ScrollBarVisibility.Auto,Content=body};Grid.SetRow(scroll,1);main.Children.Add(scroll);
-  var bottom=new StackPanel();Grid.SetRow(bottom,2);main.Children.Add(bottom);feedback.Foreground=muted;feedback.TextWrapping=TextWrapping.Wrap;feedback.Margin=new Thickness(0,8,0,8);bottom.Children.Add(feedback);
-  management.Content="打开管理中心  ↗";StyleButton(management);management.HorizontalAlignment=HorizontalAlignment.Stretch;management.Click+=async(s,e)=>await OpenManagement();bottom.Children.Add(management);
+  var bottom=new StackPanel();Grid.SetRow(bottom,2);main.Children.Add(bottom);feedback.Foreground=muted;feedback.TextWrapping=TextWrapping.Wrap;feedback.Margin=new Thickness(0,8,0,8);bottom.Children.Add(feedback);actionProgress.Foreground=accent;bottom.Children.Add(actionProgress);
+  management.Content="打开管理中心  ↗";StyleButton(management);management.HorizontalAlignment=HorizontalAlignment.Stretch;management.Click+=async(s,e)=>await RunAction(management,OpenManagement);bottom.Children.Add(management);
   SourceInitialized+=(s,e)=>Glass();Loaded+=async(s,e)=>{Render();if(!preview){InitializeTray();await Refresh();timer=new DispatcherTimer{Interval=TimeSpan.FromSeconds(3)};timer.Tick+=async(a,b)=>await Refresh();timer.Start();}};
   StateChanged+=(s,e)=>{if(WindowState==WindowState.Minimized&&tray!=null)HideToTray();else if(WindowState!=WindowState.Minimized)restoredState=WindowState;};
   Closing+=(s,e)=>{if(!exiting&&tray!=null){e.Cancel=true;if(preview)HideToTray();else Dispatcher.BeginInvoke((Action)(async()=>await ChooseExit()));}};
@@ -111,14 +114,14 @@ internal sealed class MainWindow : Window {
   using(var stream=System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("Link.AppIcon"))using(var source=new System.Drawing.Icon(stream)){trayIcon=new System.Drawing.Icon(source,System.Windows.Forms.SystemInformation.SmallIconSize);}
   var menu=new System.Windows.Forms.ContextMenuStrip();
   menu.Items.Add("打开 Link",null,(s,e)=>RestoreWindow());
-  trayManagement=new System.Windows.Forms.ToolStripMenuItem("打开管理中心",null,async(s,e)=>await OpenManagement()){Enabled=management.IsEnabled};menu.Items.Add(trayManagement);
+  trayManagement=new System.Windows.Forms.ToolStripMenuItem("打开管理中心",null,async(s,e)=>{RestoreWindow();await RunAction(management,OpenManagement);}){Enabled=management.IsEnabled};menu.Items.Add(trayManagement);
   menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());menu.Items.Add("仅退出界面（保持连接）",null,(s,e)=>{PrepareExit();Close();});
   menu.Items.Add("断开并停止后台",null,async(s,e)=>await ExitCompletely());
   tray=new System.Windows.Forms.NotifyIcon{Icon=trayIcon,Text="Link · "+status.Text,ContextMenuStrip=menu,Visible=true};
   tray.DoubleClick+=(s,e)=>RestoreWindow();
  }
  async Task ChooseExit(){
-  if(busy)return;
+  if(busy||actionPending)return;
   var dialog=new Window{Title="关闭 Link",Owner=this,Width=380,SizeToContent=SizeToContent.Height,ResizeMode=ResizeMode.NoResize,WindowStartupLocation=WindowStartupLocation.CenterOwner,Background=Background};
   var panel=new StackPanel{Margin=new Thickness(22)};dialog.Content=panel;
   panel.Children.Add(new TextBlock{Text="选择关闭方式",FontSize=18,Margin=new Thickness(0,0,0,12)});
@@ -129,7 +132,7 @@ internal sealed class MainWindow : Window {
   if(choice==1)HideToTray();else if(choice==2){PrepareExit();Close();}else if(choice==3)await ExitCompletely();
  }
  async Task ExitCompletely(){
-  if(busy)return;busy=true;RestoreWindow();feedback.Text="正在断开连接、清理网络并停止后台…";
+  if(busy||actionPending)return;busy=true;RestoreWindow();Feedback("正在断开连接、清理网络并停止后台…");
   try{
    await Task.Run(()=>{
     var service=ServiceController.GetServices().FirstOrDefault(s=>s.ServiceName=="LinkAgent");
@@ -137,24 +140,47 @@ internal sealed class MainWindow : Window {
     using(service){if(service.Status==ServiceControllerStatus.Stopped)return;Common.Pipe(Common.Map("action","shutdown"));service.WaitForStatus(ServiceControllerStatus.Stopped,TimeSpan.FromSeconds(120));}
    });
    PrepareExit();Close();
-  }catch(Exception error){feedback.Text="未能完全退出："+error.Message;}finally{busy=false;}
+  }catch(Exception error){Feedback("未能完全退出："+error.Message,true);}finally{busy=false;}
  }
  internal void PrepareExit(){exiting=true;}
  internal void RestoreWindow(){Show();WindowState=restoredState;Activate();Focus();}
  void HideToTray(){Hide();if(!notified){notified=true;tray.ShowBalloonTip(3000,"Link 已收起","双击托盘图标可恢复窗口，后台连接保持运行。",System.Windows.Forms.ToolTipIcon.Info);}}
  internal bool TrayVisible {get{return tray!=null&&tray.Visible;}}
- void StyleButton(Button b){b.Padding=new Thickness(13,9,13,9);b.Background=new SolidColorBrush(Color.FromArgb(160,255,255,255));b.BorderBrush=new SolidColorBrush(Color.FromArgb(40,100,125,120));b.BorderThickness=new Thickness(1);b.Cursor=System.Windows.Input.Cursors.Hand;b.Foreground=ink;
-  var border=new FrameworkElementFactory(typeof(Border));border.SetValue(Border.CornerRadiusProperty,new CornerRadius(7));border.SetValue(Border.BackgroundProperty,new TemplateBindingExtension(Control.BackgroundProperty));border.SetValue(Border.PaddingProperty,new TemplateBindingExtension(Control.PaddingProperty));
-  var content=new FrameworkElementFactory(typeof(ContentPresenter));content.SetValue(FrameworkElement.HorizontalAlignmentProperty,HorizontalAlignment.Center);content.SetValue(FrameworkElement.VerticalAlignmentProperty,VerticalAlignment.Center);border.AppendChild(content);var template=new ControlTemplate(typeof(Button)){VisualTree=border};
-  var hover=new Trigger{Property=UIElement.IsMouseOverProperty,Value=true};hover.Setters.Add(new Setter(Control.BackgroundProperty,new SolidColorBrush(Color.FromArgb(210,222,235,231))));template.Triggers.Add(hover);
-  var disabled=new Trigger{Property=UIElement.IsEnabledProperty,Value=false};disabled.Setters.Add(new Setter(UIElement.OpacityProperty,0.5));template.Triggers.Add(disabled);b.Template=template;
+ internal void StyleButton(Button b){
+  // Style setters allow hover/pressed triggers to override defaults. Local
+  // Background values take precedence and previously hid the feedback.
+  var style=new Style(typeof(Button));
+  style.Setters.Add(new Setter(Control.PaddingProperty,new Thickness(13,9,13,9)));
+  style.Setters.Add(new Setter(Control.BackgroundProperty,new SolidColorBrush(Color.FromArgb(160,255,255,255))));
+  style.Setters.Add(new Setter(Control.BorderBrushProperty,new SolidColorBrush(Color.FromArgb(75,100,125,120))));
+  style.Setters.Add(new Setter(Control.BorderThicknessProperty,new Thickness(1)));
+  style.Setters.Add(new Setter(Control.ForegroundProperty,ink));style.Setters.Add(new Setter(FrameworkElement.CursorProperty,System.Windows.Input.Cursors.Hand));
+  var border=new FrameworkElementFactory(typeof(Border));border.SetValue(Border.CornerRadiusProperty,new CornerRadius(7));
+  foreach(var pair in new[]{new[]{Border.BackgroundProperty,Control.BackgroundProperty},new[]{Border.PaddingProperty,Control.PaddingProperty},new[]{Border.BorderBrushProperty,Control.BorderBrushProperty},new[]{Border.BorderThicknessProperty,Control.BorderThicknessProperty}})border.SetValue(pair[0],new TemplateBindingExtension(pair[1]));
+  var content=new FrameworkElementFactory(typeof(ContentPresenter));content.SetValue(FrameworkElement.HorizontalAlignmentProperty,new TemplateBindingExtension(Control.HorizontalContentAlignmentProperty));content.SetValue(FrameworkElement.VerticalAlignmentProperty,VerticalAlignment.Center);border.AppendChild(content);
+  style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty,HorizontalAlignment.Center));style.Setters.Add(new Setter(Control.TemplateProperty,new ControlTemplate(typeof(Button)){VisualTree=border}));
+  var hover=new Trigger{Property=UIElement.IsMouseOverProperty,Value=true};hover.Setters.Add(new Setter(Control.BackgroundProperty,new SolidColorBrush(Color.FromRgb(221,235,230))));style.Triggers.Add(hover);
+  var focus=new Trigger{Property=UIElement.IsKeyboardFocusWithinProperty,Value=true};focus.Setters.Add(new Setter(Control.BorderBrushProperty,accent));focus.Setters.Add(new Setter(Control.BorderThicknessProperty,new Thickness(2)));style.Triggers.Add(focus);
+  var pressed=new Trigger{Property=System.Windows.Controls.Primitives.ButtonBase.IsPressedProperty,Value=true};pressed.Setters.Add(new Setter(Control.BackgroundProperty,new SolidColorBrush(Color.FromRgb(187,215,204))));pressed.Setters.Add(new Setter(UIElement.RenderTransformProperty,new TranslateTransform(0,1)));style.Triggers.Add(pressed);
+  var disabled=new Trigger{Property=UIElement.IsEnabledProperty,Value=false};disabled.Setters.Add(new Setter(UIElement.OpacityProperty,0.5));disabled.Setters.Add(new Setter(FrameworkElement.CursorProperty,System.Windows.Input.Cursors.Arrow));style.Triggers.Add(disabled);b.Style=style;
  }
- Button Button(string label,Action click){var b=new Button{Content=label};StyleButton(b);b.Click+=(s,e)=>click();return b;}
+ void Feedback(string text,bool error=false){feedback.Text=error?"未完成 · "+text:text;feedback.Foreground=error?new SolidColorBrush(Color.FromRgb(164,53,47)):accent;}
+ Button Button(string label,Action click){var b=new Button{Content=label};StyleButton(b);b.Click+=(sender,e)=>{try{click();}catch(Exception error){Feedback(error.Message,true);}};return b;}
+ Button AsyncButton(string label,Func<Task> click){var b=new Button{Content=label};StyleButton(b);b.Click+=async(sender,e)=>await RunAction(b,click);return b;}
+ internal async Task RunAction(Button button,Func<Task> action){
+  if(actionPending||busy)return;
+  actionPending=true;object label=button.Content;string pending="正在处理："+Convert.ToString(label)+"…";
+  button.Content="处理中…";button.IsEnabled=false;body.IsEnabled=false;navigation.IsEnabled=false;connection.IsEnabled=false;management.IsEnabled=false;actionProgress.Visibility=Visibility.Visible;Feedback(pending);
+  try{await action();if(feedback.Text==pending)Feedback("操作已完成");}
+  catch(Exception error){Feedback(error.Message,true);}
+  finally{actionPending=false;button.Content=label;button.IsEnabled=true;body.IsEnabled=true;navigation.IsEnabled=true;actionProgress.Visibility=Visibility.Collapsed;}if(!exiting){await Refresh();if(activePage!="settings")Render();else{connection.IsEnabled=true;management.IsEnabled=Common.Bool(Common.Obj(Common.Obj(snapshot,"state"),"device"),"connected")&&Common.Text(Common.Obj(Common.Obj(snapshot,"state"),"device"),"role")=="admin";}}
+ }
  TextBlock Label(string text){return new TextBlock{Text=text,Foreground=muted,Margin=new Thickness(0,15,0,8)};}
  Border Card(UIElement child){return new Border{Background=new SolidColorBrush(Color.FromArgb(135,255,255,255)),CornerRadius=new CornerRadius(9),BorderBrush=new SolidColorBrush(Color.FromArgb(90,255,255,255)),BorderThickness=new Thickness(1),Padding=new Thickness(17),Margin=new Thickness(0,0,0,10),Child=child};}
  void Render(){
+  foreach(var item in pageButtons){bool selected=item.Key==activePage;item.Value.FontWeight=selected?FontWeights.SemiBold:FontWeights.Normal;item.Value.Foreground=selected?accent:ink;item.Value.BorderThickness=selected?new Thickness(3,1,1,1):new Thickness(1);}
   body.Children.Clear();var state=Common.Obj(snapshot,"state")??Common.Map();var self=Common.Obj(state,"device");bool registered=Common.Bool(snapshot,"registered"),online=Common.Bool(self,"connected");
-  status.Text=preview?"未连接":Common.Text(snapshot,"message","后台服务未安装");connection.Content=Common.Bool(snapshot,"wanted")?"断开":"连接";connection.IsEnabled=!busy;management.IsEnabled=online&&Common.Text(self,"role")=="admin";
+  status.Text=preview?"未连接":Common.Text(snapshot,"message","后台服务未安装");connection.Content=Common.Bool(snapshot,"wanted")?"断开":"连接";connection.IsEnabled=!busy&&!actionPending;management.IsEnabled=!actionPending&&online&&Common.Text(self,"role")=="admin";
   if(tray!=null){string tooltip="Link · "+status.Text;tray.Text=tooltip.Length>63?tooltip.Substring(0,63):tooltip;trayManagement.Enabled=management.IsEnabled;}
   string entryID=Common.Text(state,"entryId");if(self!=null&&entryID==Common.Text(self,"id")){body.Children.Add(Card(new TextBlock{Text="●  本机是网络入口",Foreground=accent,FontWeight=FontWeights.SemiBold}));}
   var networkInfo=Common.Obj(snapshot,"network");string warning=Common.Text(networkInfo,"warning");if(warning!="")body.Children.Add(Label(warning));
@@ -169,13 +195,13 @@ internal sealed class MainWindow : Window {
    body.Children.Add(Label("入口与隧道使用的物理网卡"));var adapterChoice=new ComboBox{Margin=new Thickness(0,0,0,12)};adapterChoice.Items.Add(new ComboBoxItem{Content="自动选择（多网卡时需手动指定）",Tag=""});adapterChoice.SelectedIndex=0;
    foreach(var adapter in Common.Items(networkInfo,"adapters")){var item=new ComboBoxItem{Content=Common.Text(adapter,"name")+" · "+Common.Text(adapter,"ip")+(Common.Text(adapter,"kind")=="wifi"?" · Wi-Fi":""),Tag=Common.Text(adapter,"id")};adapterChoice.Items.Add(item);if(Common.Text(adapter,"id")==Common.Text(snapshot,"entryAdapterId"))adapterChoice.SelectedItem=item;}body.Children.Add(adapterChoice);
    if(Common.Bool(networkInfo,"tunDetected"))body.Children.Add(Label("检测到代理 / TUN；局域网接入会检查隧道出口，不修改代理配置。"));
-   body.Children.Add(Button("保存设置",async()=>await Execute(Common.Map("action","settings","autoStart",autoStart.IsChecked==true,"autoConnect",autoConnect.IsChecked==true,"entryAdapterId",Convert.ToString(((ComboBoxItem)adapterChoice.SelectedItem).Tag)))));
+   body.Children.Add(AsyncButton("保存设置",async()=>await Execute(Common.Map("action","settings","autoStart",autoStart.IsChecked==true,"autoConnect",autoConnect.IsChecked==true,"entryAdapterId",Convert.ToString(((ComboBoxItem)adapterChoice.SelectedItem).Tag)))));
    body.Children.Add(new TextBlock{Text="最小化会收起到托盘；关闭时可选择是否停止后台。\n仅退出界面会保持连接；完全退出会先清理网络。\n主动断开或被踢下线后，需要手动连接。",Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,22,0,0)});return;
   }
   if(!registered){
    body.Children.Add(new TextBlock{Text="加入一个网络",FontSize=17,Margin=new Thickness(0,0,0,4)});body.Children.Add(new TextBlock{Text="输入自托管实例的地址与一次性加入码。",Foreground=muted});body.Children.Add(Label("服务端地址"));
    server.Padding=new Thickness(10);if(server.Text=="")server.Text="https://";body.Children.Add(server);body.Children.Add(Label("一次性加入码"));code.Padding=new Thickness(10);code.TextWrapping=TextWrapping.Wrap;code.MinHeight=62;body.Children.Add(code);
-   body.Children.Add(new TextBlock{Text="首次连接将安装后台组件与此实例的证书。",Foreground=muted,Margin=new Thickness(0,13,0,18),TextWrapping=TextWrapping.Wrap});body.Children.Add(Button("加入并连接",async()=>await Enroll()));return;
+   body.Children.Add(new TextBlock{Text="首次连接将安装后台组件与此实例的证书。",Foreground=muted,Margin=new Thickness(0,13,0,18),TextWrapping=TextWrapping.Wrap});body.Children.Add(AsyncButton("加入并连接",async()=>await Enroll()));return;
   }
   if(activePage=="services"){
    body.Children.Add(new TextBlock{Text="本机服务",FontSize=17,Margin=new Thickness(0,0,0,16)});
@@ -187,7 +213,7 @@ internal sealed class MainWindow : Window {
   body.Children.Add(new TextBlock{Text="设备",FontSize=17,Margin=new Thickness(0,0,0,15)});
   foreach(var d in Common.Items(state,"devices")){
    var row=new DockPanel();bool isSelf=Common.Text(d,"id")==Common.Text(self,"id");string ip=Common.Text(d,"ip");
-   if(!isSelf){var remote=Button("远程桌面",()=>{IPAddress parsed;if(IPAddress.TryParse(ip,out parsed))Process.Start("mstsc.exe","/v:"+ip);});remote.IsEnabled=Common.Bool(d,"connected");DockPanel.SetDock(remote,Dock.Right);row.Children.Add(remote);}
+   if(!isSelf){var remote=Button("远程桌面",()=>{IPAddress parsed;if(!IPAddress.TryParse(ip,out parsed))throw new InvalidOperationException("设备地址尚未就绪");Process.Start("mstsc.exe","/v:"+ip);Feedback("已启动远程桌面");});remote.IsEnabled=Common.Bool(d,"connected");DockPanel.SetDock(remote,Dock.Right);row.Children.Add(remote);}
    var text=new StackPanel();text.Children.Add(new TextBlock{Text=Common.Text(d,"name")+(isSelf?"  ·  本机":""),FontWeight=FontWeights.SemiBold});text.Children.Add(new TextBlock{Text=(Common.Bool(d,"connected")?"● 在线":"○ 离线")+"    "+ip+(Common.Text(d,"id")==entryID?"    网络入口":""),Foreground=muted,Margin=new Thickness(0,8,0,0),TextWrapping=TextWrapping.Wrap});text.Children.Add(new TextBlock{Text=LanBadge(d),Foreground=Common.Bool(Common.Obj(d,"layer2"),"enabled")?accent:muted,Margin=new Thickness(0,7,0,0),TextWrapping=TextWrapping.Wrap});row.Children.Add(text);body.Children.Add(Card(row));
   }
   if(!online)body.Children.Add(Label("设备列表将在网络连接成功后更新。"));
@@ -205,37 +231,37 @@ internal sealed class MainWindow : Window {
   var core=new StackPanel();core.Children.Add(new TextBlock{Text="基础连接",FontWeight=FontWeights.SemiBold});core.Children.Add(new TextBlock{Text="设备互联、管理中心与远程桌面。",Foreground=muted,Margin=new Thickness(0,8,0,12),TextWrapping=TextWrapping.Wrap});
   bool compatible=Common.Text(snapshot,"version")==Common.Version;
   core.Children.Add(new TextBlock{Text=compatible?"● 已安装 · "+Common.Version:"后台尚未安装或需要更新",Foreground=compatible?accent:muted});
-  if(!compatible)core.Children.Add(Button("安装 / 更新基础组件",async()=>await ManageCore()));body.Children.Add(Card(core));
+  if(!compatible)core.Children.Add(AsyncButton("安装 / 更新基础组件",async()=>await ManageCore()));body.Children.Add(Card(core));
   var component=Common.Obj(snapshot,"components");bool installed=Common.Bool(component,"installed"),prepared=Common.Bool(component,"prepared"),enabled=Common.Bool(snapshot,"layer2Enabled"),maintenance=Common.Bool(snapshot,"componentBusy");
   var optional=new StackPanel();var title=new DockPanel();var badge=new TextBlock{Text="可选",Foreground=muted,HorizontalAlignment=HorizontalAlignment.Right};DockPanel.SetDock(badge,Dock.Right);title.Children.Add(badge);title.Children.Add(new TextBlock{Text="局域网接入",FontWeight=FontWeights.SemiBold});optional.Children.Add(title);
   optional.Children.Add(new TextBlock{Text="通过网络入口接入远端局域网。安装后默认关闭，由本机决定是否参与。",Foreground=muted,Margin=new Thickness(0,10,0,12),TextWrapping=TextWrapping.Wrap});
   optional.Children.Add(new TextBlock{Text=Common.Bool(component,"foreign")?"检测到已有组件，需先确认归属":maintenance?"组件维护中":enabled?"● 已启用":prepared?"已安装 · 未启用":installed?"组件需要修复":"尚未安装",Foreground=enabled?accent:muted,Margin=new Thickness(0,0,0,12)});
   var actions=new WrapPanel();
-  if(!installed){var add=Button("安装组件",async()=>await ManageComponent("install"));add.IsEnabled=compatible&&!busy&&!maintenance;actions.Children.Add(add);}
+  if(!installed){var add=AsyncButton("安装组件",async()=>await ManageComponent("install"));add.IsEnabled=compatible&&!busy&&!maintenance;actions.Children.Add(add);}
   else{
-   var toggle=Button(enabled?"停用":"启用",async()=>await Execute(Common.Map("action","layer2-enable","enabled",!enabled)));toggle.IsEnabled=compatible&&!busy&&!maintenance&&(prepared||enabled);actions.Children.Add(toggle);
-   foreach(var item in new[]{new[]{"repair","修复"},new[]{"remove","卸载组件"}}){string action=item[0];var button=Button(item[1],async()=>await ManageComponent(action));button.IsEnabled=compatible&&!busy;button.Margin=new Thickness(8,0,0,0);actions.Children.Add(button);}
+   var toggle=AsyncButton(enabled?"停用":"启用",async()=>await Execute(Common.Map("action","layer2-enable","enabled",!enabled)));toggle.IsEnabled=compatible&&!busy&&!maintenance&&(prepared||enabled);actions.Children.Add(toggle);
+   foreach(var item in new[]{new[]{"repair","修复"},new[]{"remove","卸载组件"}}){string action=item[0];var button=AsyncButton(item[1],async()=>await ManageComponent(action));button.IsEnabled=compatible&&!busy;button.Margin=new Thickness(8,0,0,0);actions.Children.Add(button);}
   }
-  actions.Children.Add(Button("复制诊断",async()=>{try{var reply=await Task.Run(()=>Common.Pipe(Common.Map("action","component-diagnostics")));Clipboard.SetText(Common.Text(reply,"text"));feedback.Text="已复制组件诊断（已省略凭据与地址）";}catch(Exception error){feedback.Text=error.Message;}}));
+  actions.Children.Add(AsyncButton("复制诊断",async()=>{try{var reply=await Task.Run(()=>Common.Pipe(Common.Map("action","component-diagnostics")));Clipboard.SetText(Common.Text(reply,"text"));Feedback("已复制组件诊断（已省略凭据与地址）");}catch(Exception error){Feedback(error.Message,true);}}));
   optional.Children.Add(actions);string note=Common.Text(snapshot,"componentMessage");if(note!="")optional.Children.Add(new TextBlock{Text=note,Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,12,0,0)});
   if(enabled)optional.Children.Add(new TextBlock{Text=Common.Text(Common.Obj(snapshot,"layer2"),"message","等待管理端启用局域网接入"),Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,12,0,0)});
   optional.Children.Add(new TextBlock{Text="包含 SoftEther Client 与 Bridge，Link 根据设备角色使用。停用先恢复网络；卸载只移除本功能组件。入口设备停用后，依赖它的局域网访问会中断。",FontSize=11,Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,16,0,0)});body.Children.Add(Card(optional));
  }
- async Task ManageCore(){if(busy||preview)return;busy=true;feedback.Text="正在安装基础组件，Windows 可能请求管理员权限…";Render();try{await Task.Run(()=>Components.Elevate("--install-core"));feedback.Text="基础组件已更新";}catch(Exception e){feedback.Text=e.Message;}finally{busy=false;}await Refresh();Render();}
- async Task ManageComponent(string action){if(busy||preview)return;busy=true;feedback.Text=action=="remove"?"正在恢复网络并卸载组件…":"正在准备组件，首次下载可能需要几分钟…";Render();try{await Task.Run(()=>Components.Elevate("--components "+action));feedback.Text=action=="remove"?"组件已卸载":"组件已安装，局域网接入保持关闭";}catch(Exception e){feedback.Text=e.Message;}finally{busy=false;}await Refresh();Render();}
- async Task Refresh(){if(busy||refreshing||preview)return;refreshing=true;try{var next=await Task.Run(()=>Common.Pipe(Common.Map("action","status")));snapshot=next;if(activePage!="settings")Render();}catch{snapshot=Common.Map();status.Text="后台服务未安装或未启动";connection.Content="启动 / 连接";connection.IsEnabled=true;management.IsEnabled=false;}finally{refreshing=false;}if(openOnConnect&&management.IsEnabled){openOnConnect=false;await OpenManagement();}}
- async Task Execute(Dictionary<string,object> request){if(busy||preview)return;busy=true;connection.IsEnabled=false;try{await Task.Run(()=>Common.Pipe(request));feedback.Text="";}catch(Exception e){feedback.Text=e.Message;}finally{busy=false;}await Refresh();}
+ async Task ManageCore(){if(busy||preview)return;busy=true;Feedback("正在安装基础组件，Windows 可能请求管理员权限…");try{await Task.Run(()=>Components.Elevate("--install-core"));Feedback("基础组件已更新");}catch(Exception e){Feedback(e.Message,true);}finally{busy=false;}await Refresh();}
+ async Task ManageComponent(string action){if(busy||preview)return;busy=true;Feedback(action=="remove"?"正在恢复网络并卸载组件…":"正在准备组件，首次下载可能需要几分钟…");try{await Task.Run(()=>Components.Elevate("--components "+action));Feedback(action=="remove"?"组件已卸载":"组件已安装，局域网接入保持关闭");}catch(Exception e){Feedback(e.Message,true);}finally{busy=false;}await Refresh();}
+ async Task Refresh(){if(busy||actionPending||refreshing||preview)return;refreshing=true;try{var next=await Task.Run(()=>Common.Pipe(Common.Map("action","status")));snapshot=next;if(!actionPending&&activePage!="settings")Render();}catch{snapshot=Common.Map();status.Text="后台服务未安装或未启动";connection.Content="启动 / 连接";connection.IsEnabled=!actionPending;management.IsEnabled=false;}finally{refreshing=false;}if(openOnConnect&&management.IsEnabled){openOnConnect=false;await OpenManagement();}}
+ async Task Execute(Dictionary<string,object> request){if(busy||preview)return;busy=true;connection.IsEnabled=false;try{await Task.Run(()=>Common.Pipe(request));string action=Common.Text(request,"action");Feedback(action=="settings"?"设置已保存":action=="layer2-enable"?(Common.Bool(request,"enabled")?"局域网接入已开启，请查看连接状态":"局域网接入已停用"):action=="connect"?"连接请求已提交，正在建立连接":action=="disconnect"?"已断开连接":"操作已完成");}catch(Exception e){Feedback(e.Message,true);}finally{busy=false;}await Refresh();}
  async Task Connect(){
   if(busy)return;
   using(var service=ServiceController.GetServices().FirstOrDefault(s=>s.ServiceName=="LinkAgent")){
-   if(service!=null&&service.Status==ServiceControllerStatus.Stopped){busy=true;try{await Task.Run(()=>Components.Elevate("--start-service"));snapshot=await Task.Run(()=>Common.Pipe(Common.Map("action","status")));}catch(Exception error){feedback.Text=error.Message;return;}finally{busy=false;}}
+   if(service!=null&&service.Status==ServiceControllerStatus.Stopped){busy=true;try{await Task.Run(()=>Components.Elevate("--start-service"));snapshot=await Task.Run(()=>Common.Pipe(Common.Map("action","status")));}catch(Exception error){Feedback(error.Message,true);return;}finally{busy=false;}}
   }
   if(!Common.Bool(snapshot,"registered")){await Enroll();return;}await Execute(Common.Map("action",Common.Bool(snapshot,"wanted")?"disconnect":"connect"));}
- async Task Enroll(){if(busy||preview)return;string endpoint=server.Text,credential=code.Text;if(credential.Trim()==""){feedback.Text="请输入一次性加入码";return;}busy=true;connection.IsEnabled=false;feedback.Text="正在准备后台服务…";
-  try{await Task.Run(()=>Program.Install());await Task.Run(()=>Common.Pipe(Common.Map("action","enroll","server",endpoint,"code",credential)));code.Clear();feedback.Text="已加入，正在建立连接。";openOnConnect=true;}
-  catch(Exception e){feedback.Text=e.Message;}finally{busy=false;}await Refresh();
+ async Task Enroll(){if(busy||preview)return;string endpoint=server.Text,credential=code.Text;if(credential.Trim()==""){Feedback("请输入一次性加入码",true);return;}busy=true;connection.IsEnabled=false;Feedback("正在准备后台服务…");
+  try{await Task.Run(()=>Program.Install());await Task.Run(()=>Common.Pipe(Common.Map("action","enroll","server",endpoint,"code",credential)));code.Clear();Feedback("已加入，正在建立连接。");openOnConnect=true;}
+  catch(Exception e){Feedback(e.Message,true);}finally{busy=false;}await Refresh();
  }
- async Task OpenManagement(){if(busy||preview)return;try{var reply=await Task.Run(()=>Common.Pipe(Common.Map("action","browser")));string url=Common.Text(reply,"url");Uri uri;if(!Uri.TryCreate(url,UriKind.Absolute,out uri)||uri.Scheme!="https")throw new InvalidOperationException("管理地址无效");Process.Start(new ProcessStartInfo(url){UseShellExecute=true});}catch(Exception e){feedback.Text=e.Message;}}
+ async Task OpenManagement(){if(busy||preview)return;try{var reply=await Task.Run(()=>Common.Pipe(Common.Map("action","browser")));string url=Common.Text(reply,"url");Uri uri;if(!Uri.TryCreate(url,UriKind.Absolute,out uri)||uri.Scheme!="https")throw new InvalidOperationException("管理地址无效");Process.Start(new ProcessStartInfo(url){UseShellExecute=true});Feedback("已在浏览器中打开管理中心");}catch(Exception e){Feedback(e.Message,true);}}
  [StructLayout(LayoutKind.Sequential)]struct Accent {public int State,Flags,Color,Animation;}
  [StructLayout(LayoutKind.Sequential)]struct Composition {public int Attribute;public IntPtr Data;public int Size;}
  [DllImport("user32.dll")]static extern int SetWindowCompositionAttribute(IntPtr handle,ref Composition data);
