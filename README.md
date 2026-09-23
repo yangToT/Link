@@ -2,7 +2,7 @@
 
 自托管的设备网络与服务访问工具。Windows 客户端连接自己的实例，通过专用网络访问设备和资源。
 
-**客户端 0.1.0-alpha.2 / 服务端 0.1.0-alpha.1，测试版本。** Linux 服务端和一台真实 Windows 客户端已连接，私有管理登录与后台服务重启恢复通过验证。两台 Windows 跨网互通、系统重启后恢复和实际应用调用尚未验收。
+**客户端 / 服务端 0.2.0-alpha.1，测试版本。** 新增 SSE 状态推送与卸载入口。Linux 服务端和一台真实 Windows 客户端已连接，具体验证范围见 [验证记录](docs/validation.md)。两台 Windows 跨网互通、系统重启后恢复和实际应用调用尚未验收。
 
 | 程序 | 内容 |
 | --- | --- |
@@ -21,6 +21,10 @@
 Windows 客户端最小化或关闭窗口后收起到右下角托盘；双击托盘图标或再次启动 `Link.exe` 可恢复已有窗口。右键菜单提供管理中心入口和“退出界面（保持连接）”。Windows 可能将图标放在托盘的 `^` 隐藏区域，可将其拖到常显区域。
 
 程序下载见 [GitHub Releases](https://github.com/yangToT/Link/releases)。请先阅读对应版本的验证记录。
+
+## 可选预览功能
+
+源码增加了可选的二层局域网接入、物理网卡选择、TUN 路由检查和断开恢复记录。二层模式默认关闭，尚未启用或完成跨机验收，发布包不包含所需 SoftEther 组件。组件准备、端口范围及限制见 [二层接入说明](docs/layer2.md)。文件夹读写共享尚未实现。
 
 ## 当前边界
 
@@ -47,6 +51,9 @@ Windows 安装 Go 1.24+，运行 `./build.ps1`。客户端使用 Windows 的 .NE
 ## 文档与许可
 
 - [部署与恢复](docs/deployment.md)
+- [卸载与清理](docs/uninstall.md)
+- [控制通信与 SSE 推送](docs/communication.md)
+- [读写文件夹共享需求（待实现）](docs/folder-sharing.md)
 - [验证记录](docs/validation.md)
 - [需求基线](docs/design.md)
 - [第三方声明](THIRD-PARTY-NOTICES.md)

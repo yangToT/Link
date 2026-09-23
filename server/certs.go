@@ -30,6 +30,9 @@ func initInstance(dir, publicHost string) error {
 	if _, e := os.Stat(filepath.Join(dir, "config.json")); !os.IsNotExist(e) {
 		return fmt.Errorf("instance already exists")
 	}
+	if entries, e := os.ReadDir(dir); e == nil && len(entries) != 0 {
+		return fmt.Errorf("initialize into an empty instance directory")
+	}
 	if e := os.MkdirAll(dir, 0700); e != nil {
 		return e
 	}
@@ -60,7 +63,7 @@ func initInstance(dir, publicHost string) error {
 	if e := atomicWrite(filepath.Join(dir, "config.json"), b, 0600); e != nil {
 		return e
 	}
-	return nil
+	return atomicWrite(filepath.Join(dir, ".link-owned"), []byte("Link instance data\n"), 0600)
 }
 func issueLeaf(dir string, hosts []string) error {
 	cb, e := os.ReadFile(filepath.Join(dir, "ca.pem"))

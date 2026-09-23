@@ -13,3 +13,7 @@ Link calls unmodified NetBird executables as separate processes and communicates
 Copies of the upstream license texts are in `third_party/`. Windows packages preserve the Wintun binary license. Link does not imply endorsement by NetBird or WireGuard.
 
 Go's runtime and standard library are covered by the Go BSD license: https://go.dev/LICENSE. The Windows interface uses Windows' installed .NET Framework and does not redistribute the .NET runtime.
+
+## Optional development integration
+
+The experimental layer-2 feature invokes separately installed SoftEther VPN components through their documented CLI and JSON-RPC APIs. This source change does not bundle SoftEther executables, drivers, or upstream source. Before distributing those components, pin the exact build and audit its source, binary, driver and dependency licenses; include the corresponding notices and any required source. Upstream: https://github.com/SoftEtherVPN/SoftEtherVPN .

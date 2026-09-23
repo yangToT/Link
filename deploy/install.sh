@@ -19,6 +19,9 @@ for binary in netbird netbird-server; do
  mv "$root/vendor/$binary.new" "$root/vendor/$binary"
 done
 cp "$source/deploy/bootstrap.py" "$root/deploy/bootstrap.py"
+cp "$source/link-uninstall" "$root/link-uninstall"
+chmod 755 "$root/link-uninstall"
+cp "$source/deploy/uninstall.py" "$source/deploy/uninstall.sh" "$root/deploy/"
 python3 "$root/deploy/bootstrap.py" "$1"
 # Only this product's units are restarted after replacing their executables.
 systemctl restart link-network link-server link-peer

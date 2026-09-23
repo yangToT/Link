@@ -21,10 +21,12 @@ internal sealed class Agent : ServiceBase {
  readonly Dictionary<string,Forward> forwards=new Dictionary<string,Forward>();
  readonly HashSet<string> failedForwards=new HashSet<string>();
  readonly HashSet<string> localRules=new HashSet<string>();
+ EventStream events;int eventGeneration;readonly StateOrder stateOrder=new StateOrder();
+ Layer2 layer2;Dictionary<string,object> networkReport=Common.Map();
  Process network;ProcessJob job;bool wanted,stopping;string message="未连接";Timer timer;int ticking;DateTime lastGood=DateTime.MinValue;NamedPipeServerStream activePipe;
  internal Agent(){ServiceName="LinkAgent";CanStop=true;AutoLog=false;}
- protected override void OnStart(string[] args){RequestAdditionalTime(120000);Common.ProtectFolder();CleanOwnedRules();job=new ProcessJob();config=Common.Load();wanted=Common.Bool(config,"autoConnect")&&!Common.Bool(config,"paused")&&Common.Text(config,"token")!="";Task.Run((Action)Serve);timer=new Timer(Tick,null,100,5000);}
- protected override void OnStop(){stopping=true;if(timer!=null)timer.Dispose();if(activePipe!=null)activePipe.Dispose();lock(gate)StopNetwork();if(job!=null)job.Dispose();}
+ protected override void OnStart(string[] args){RequestAdditionalTime(120000);Common.ProtectFolder();CleanOwnedRules();job=new ProcessJob();config=Common.Load();layer2=new Layer2();layer2.Recover();networkReport=NetworkDiscovery.Discover(Common.Text(config,"entryAdapterId"));wanted=Common.Bool(config,"autoConnect")&&!Common.Bool(config,"paused")&&Common.Text(config,"token")!="";Task.Run((Action)Serve);timer=new Timer(Tick,null,100,15000);}
+ protected override void OnStop(){RequestAdditionalTime(120000);stopping=true;if(timer!=null)timer.Dispose();if(activePipe!=null)activePipe.Dispose();lock(gate)StopNetwork();if(job!=null)job.Dispose();}
  void Serve(){while(!stopping){try{
   var acl=new PipeSecurity();acl.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.NetworkSid,null),PipeAccessRights.FullControl,AccessControlType.Deny));
   foreach(var sid in new[]{WellKnownSidType.LocalSystemSid,WellKnownSidType.BuiltinAdministratorsSid})acl.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(sid,null),PipeAccessRights.FullControl,AccessControlType.Allow));
@@ -38,7 +40,7 @@ internal sealed class Agent : ServiceBase {
  static string ReadBounded(TextReader reader){var b=new StringBuilder();int c;while((c=reader.Read())>=0&&c!='\n'){b.Append((char)c);if(b.Length>16384)throw new IOException();}return b.ToString();}
  static string NetworkError(WebException e){var r=e.Response as HttpWebResponse;if(r!=null&&(int)r.StatusCode==403)return "设备未获授权，请联系管理员";return "连接未完成，请检查服务端地址、加入码与网络";}
  Dictionary<string,object> Command(Dictionary<string,object> request){string action=Common.Text(request,"action");
-  if(action=="status")return Common.Map("message",message,"wanted",wanted,"registered",Common.Text(config,"token")!="","autoStart",Common.Bool(config,"autoStart"),"autoConnect",Common.Bool(config,"autoConnect"),"state",snapshot,"version",Common.Version);
+  if(action=="status")return Common.Map("message",message,"wanted",wanted,"registered",Common.Text(config,"token")!="","autoStart",Common.Bool(config,"autoStart"),"autoConnect",Common.Bool(config,"autoConnect"),"entryAdapterId",Common.Text(config,"entryAdapterId"),"network",Common.Obj(networkReport,"network"),"layer2",layer2.Status,"state",snapshot,"version",Common.Version);
   if(action=="enroll"){
    if(Common.Text(config,"token")!="")throw new InvalidOperationException("本机已加入网络；更换实例前请卸载并清除本机身份");
    string endpoint=Common.Text(request,"server").Trim().TrimEnd('/'),code=Common.Text(request,"code").Trim();Common.ValidateEndpoint(endpoint);
@@ -49,32 +51,46 @@ internal sealed class Agent : ServiceBase {
    pending["token"]=Common.Text(enrolled,"token");pending["deviceId"]=Common.Text(enrolled,"deviceId");pending["role"]=Common.Text(enrolled,"role");pending["autoStart"]=true;pending["autoConnect"]=true;pending["paused"]=false;
    // Persist identity before starting networking so a startup failure cannot consume enrollment twice.
    config=pending;Common.Save(config);File.WriteAllBytes(Path.Combine(Common.Home,"ca.pem"),cert);Common.Trust(cert,parts[1]);
-   wanted=true;StartNetwork(Common.Text(enrolled,"setupKey"));message="正在连接";return Common.Map("ok",true);
+   wanted=true;StartNetwork(Common.Text(enrolled,"setupKey"));EnsureEvents();message="正在连接";return Common.Map("ok",true);
   }
   if(action=="connect"){
    if(Common.Text(config,"token")=="")throw new InvalidOperationException("请先加入网络");var reply=Common.Api(config,"/agent/reconnect",Common.Map());
-   StopNetwork();config["paused"]=false;Common.Save(config);wanted=true;StartNetwork(Common.Text(reply,"setupKey"));message="正在连接";return Common.Map("ok",true);
+   StopNetwork();config["paused"]=false;Common.Save(config);wanted=true;StartNetwork(Common.Text(reply,"setupKey"));EnsureEvents();message="正在连接";return Common.Map("ok",true);
   }
   if(action=="disconnect"){Pause("已断开");return Common.Map("ok",true);}
   if(action=="settings"){
+   string adapter=Common.Text(request,"entryAdapterId");if(adapter!=""&&!NetworkDiscovery.Read().Any(n=>n.Physical&&n.ID==adapter))throw new InvalidOperationException("请选择本机物理网卡");
+   config["entryAdapterId"]=adapter;layer2.Stop();networkReport=NetworkDiscovery.Discover(adapter);
    bool autoStart=Common.Bool(request,"autoStart"),autoConnect=Common.Bool(request,"autoConnect");Common.Run("sc.exe","config LinkAgent start= "+(autoStart?"auto":"demand"));config["autoStart"]=autoStart;config["autoConnect"]=autoConnect;Common.Save(config);return Common.Map("ok",true);
   }
   if(action=="browser"){var reply=Common.Api(config,"/agent/browser-ticket",Common.Map());return reply;}
   throw new InvalidOperationException("不支持的操作");
  }
  void Pause(string reason){wanted=false;config["paused"]=true;Common.Save(config);StopNetwork();snapshot=Common.Map();message=reason;}
- void Tick(object state){if(Interlocked.Exchange(ref ticking,1)==1)return;try{lock(gate){if(stopping||!wanted)return;
+ void Tick(object state){if(Interlocked.Exchange(ref ticking,1)==1)return;try{lock(gate){if(stopping)return;if(!wanted){layer2.Recover();return;}
   try{
-   var local=Discover();var states=Common.Map();foreach(var id in failedForwards)states[id]="error";
+   EnsureEvents();networkReport=NetworkDiscovery.Discover(Common.Text(config,"entryAdapterId"));var local=Common.Parse(Common.Json(networkReport));Common.Obj(local,"network").Remove("adapters");local["layer2"]=layer2.Status;var states=Common.Map();foreach(var id in failedForwards)states[id]="error";
    var checks=forwards.Select(item=>new {ID=item.Key,Check=Task.Run(()=>item.Value.Healthy())}).ToArray();Task.WaitAll(checks.Select(c=>(Task)c.Check).ToArray(),2000);foreach(var check in checks)states[check.ID]=check.Check.Status==TaskStatus.RanToCompletion&&check.Check.Result?"ready":"error";
    local["mappingStates"]=states;local["applications"]=Applications();var reply=Common.Api(config,"/agent/heartbeat",local);
-   if(Common.Text(reply,"action")=="disconnect"){Pause("已被断开，请手动重新连接");return;}
-   lastGood=DateTime.UtcNow;snapshot=reply;
-   if(network==null||network.HasExited){StartNetwork("");message="正在连接";}
-   ApplyForwards(Common.Items(reply,"forwards"));ApplyLocalRules(reply);var device=Common.Obj(reply,"device");message=Common.Bool(device,"connected")?"已连接":"正在建立网络连接";
+   lastGood=DateTime.UtcNow;ApplyState(reply);
+
   }catch(WebException e){var response=e.Response as HttpWebResponse;if(response!=null&&(int)response.StatusCode==403){Pause("设备已停用");return;}message="连接中断，正在重试";if(DateTime.UtcNow-lastGood>TimeSpan.FromSeconds(35)){StopNetwork();snapshot=Common.Map();}}
    catch{message="网络配置未完成，请重试连接";if(DateTime.UtcNow-lastGood>TimeSpan.FromSeconds(35))StopNetwork();}
  }}finally{Interlocked.Exchange(ref ticking,0);}}
+ void EnsureEvents(){if(events!=null||!wanted)return;int generation=++eventGeneration;events=new EventStream(config,reply=>{lock(gate){if(!stopping&&wanted&&generation==eventGeneration){try{ApplyState(reply);}catch{message="实时配置应用失败，等待重试";}}}},()=>{lock(gate){if(!stopping&&wanted&&generation==eventGeneration)Pause("设备连接已撤销，请手动重新连接");}});}
+ void ApplyState(Dictionary<string,object> reply){
+  if(!stateOrder.Accept(reply))return;
+  if(Common.Text(reply,"action")=="disconnect"){Pause("已被断开，请手动重新连接");return;}
+  snapshot=reply;if(network==null||network.HasExited){StartNetwork("");message="正在连接";}
+  ApplyForwards(Common.Items(reply,"forwards"));ApplyLocalRules(reply);message=Common.Bool(Common.Obj(reply,"device"),"connected")?"已连接":"正在建立网络连接";
+  RefreshLayer2();
+ }
+ void RefreshLayer2(){
+  if(Common.Text(snapshot,"networkMode")=="bridged"){
+   try{var plan=Common.Api(config,"/agent/layer2",Common.Map());if(Common.Bool(plan,"enabled"))layer2.Apply(plan,networkReport,Common.Text(config,"server"));else layer2.Stop();}
+   catch{layer2.Stop();if(Common.Text(layer2.Status,"state")!="cleanup-failed")layer2.Status=Common.Map("state","blocked","message","局域网接入授权或入口尚未就绪","ip","");}
+  }else layer2.Stop();
+ }
  void StartNetwork(string setupKey){
   if(network!=null&&!network.HasExited)return;string executable=Path.Combine(Common.Bin,"netbird.exe");if(!File.Exists(executable))throw new InvalidOperationException("安装包缺少网络组件");
   string keyFile=Path.Combine(Common.Home,"setup-key");if(setupKey!="")File.WriteAllText(keyFile,setupKey);
@@ -83,29 +99,11 @@ internal sealed class Agent : ServiceBase {
   var info=new ProcessStartInfo(executable,args){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};info.EnvironmentVariables["NB_ENABLE_LOCAL_FORWARDING"]="true";
   network=new Process{StartInfo=info};network.OutputDataReceived+=(s,e)=>{};network.ErrorDataReceived+=(s,e)=>{};network.Start();job.Add(network);network.BeginOutputReadLine();network.BeginErrorReadLine();
  }
- void StopNetwork(){foreach(var f in forwards.Values)f.Dispose();forwards.Clear();failedForwards.Clear();foreach(var rule in localRules)RemoveRule(rule);localRules.Clear();
+ void StopNetwork(){eventGeneration++;if(events!=null){events.Dispose();events=null;}if(layer2!=null)layer2.Stop();foreach(var f in forwards.Values)f.Dispose();forwards.Clear();failedForwards.Clear();foreach(var rule in localRules)RemoveRule(rule);localRules.Clear();
   if(network!=null){try{if(!network.HasExited){network.Kill();network.WaitForExit(10000);}}catch{}network.Dispose();network=null;}
   string keyFile=Path.Combine(Common.Home,"setup-key");if(File.Exists(keyFile))File.Delete(keyFile);
  }
- internal static Dictionary<string,object> Discover(){
-  var networks=new List<string>();string lan="";
-  foreach(var nic in NetworkInterface.GetAllNetworkInterfaces().Where(n=>n.OperationalStatus==OperationalStatus.Up&&n.NetworkInterfaceType!=NetworkInterfaceType.Loopback&&n.Name!="Link0"&&!n.Description.ToLowerInvariant().Contains("wireguard"))){
-   var properties=nic.GetIPProperties();if(!properties.GatewayAddresses.Any(g=>g.Address.AddressFamily==AddressFamily.InterNetwork&&!g.Address.Equals(IPAddress.Any)))continue;
-   foreach(var address in properties.UnicastAddresses.Where(a=>a.Address.AddressFamily==AddressFamily.InterNetwork&&Private(a.Address))){
-    if(lan=="")lan=address.Address.ToString();var bytes=address.Address.GetAddressBytes();var mask=address.IPv4Mask.GetAddressBytes();int bits=mask.Sum(x=>Convert.ToString(x,2).Count(c=>c=='1'));
-    if(bits<16||bits>32)continue;for(int i=0;i<4;i++)bytes[i]&=mask[i];networks.Add(new IPAddress(bytes)+"/"+bits);
-   }
-  }
-  networks.AddRange(PrivateRoutes());return Common.Map("lanIp",lan,"networks",networks.Distinct().OrderBy(n=>Int32.Parse(n.Split('/')[1])).Where(n=>!networks.Any(other=>other!=n&&ContainsNetwork(other,n))).Take(16).ToArray());
- }
- static bool ContainsNetwork(string outer,string inner){var a=outer.Split('/');var b=inner.Split('/');int bits=Int32.Parse(a[1]);if(bits>Int32.Parse(b[1]))return false;var x=IPAddress.Parse(a[0]).GetAddressBytes();var y=IPAddress.Parse(b[0]).GetAddressBytes();for(int i=0;i<bits;i++)if((x[i/8]&(1<<(7-i%8)))!=(y[i/8]&(1<<(7-i%8))))return false;return true;}
- [DllImport("iphlpapi.dll")]static extern int GetIpForwardTable(IntPtr table,ref int size,bool order);
- static IEnumerable<string> PrivateRoutes(){
-  var result=new List<string>();int size=0;GetIpForwardTable(IntPtr.Zero,ref size,false);if(size<4||size>1048576)return result;var buffer=Marshal.AllocHGlobal(size);
-  try{if(GetIpForwardTable(buffer,ref size,false)!=0)return result;var excluded=new HashSet<int>(NetworkInterface.GetAllNetworkInterfaces().Where(n=>n.Name=="Link0"||n.Description.ToLowerInvariant().Contains("wireguard")).Select(n=>n.GetIPProperties().GetIPv4Properties()).Where(p=>p!=null).Select(p=>p.Index));
-   int count=Marshal.ReadInt32(buffer);for(int i=0;i<count&&4+(i+1)*56<=size;i++){var row=IntPtr.Add(buffer,4+i*56);if(excluded.Contains(Marshal.ReadInt32(row,16)))continue;var dest=new IPAddress(BitConverter.GetBytes(Marshal.ReadInt32(row)));var mask=BitConverter.GetBytes(Marshal.ReadInt32(row,4));int bits=mask.Sum(x=>Convert.ToString(x,2).Count(c=>c=='1'));if(Private(dest)&&bits>=16&&bits<=30)result.Add(dest+"/"+bits);}
-  }finally{Marshal.FreeHGlobal(buffer);}return result;
- }
+ internal static Dictionary<string,object> Discover(){return NetworkDiscovery.Discover("");}
  internal static bool Private(IPAddress ip){var b=ip.GetAddressBytes();return b.Length==4&&(b[0]==10||(b[0]==172&&b[1]>=16&&b[1]<=31)||(b[0]==192&&b[1]==168));}
  static object[] Applications(){return IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Where(e=>e.Port>0).Select(e=>e.Port).Distinct().OrderBy(p=>p).Take(100).Select(p=>(object)Common.Map("name","TCP 服务","port",p)).ToArray();}
  static void RemoveRule(string name){try{Common.Run("netsh.exe","advfirewall firewall delete rule name="+Common.Quote(name));}catch{}}

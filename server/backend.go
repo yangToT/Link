@@ -49,6 +49,7 @@ func (b *Backend) call(method, path string, body any, out any) error {
 		return fmt.Errorf("network backend unavailable")
 	}
 	defer resp.Body.Close()
+	if method == "DELETE" && resp.StatusCode == http.StatusNotFound { return nil }
 	if resp.StatusCode >= 300 {
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("network backend returned %d", resp.StatusCode)

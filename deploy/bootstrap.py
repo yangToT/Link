@@ -18,11 +18,12 @@ def unit(name,exec_start,extra=''):
  source.chmod(0o644)
  if not target.exists():target.symlink_to(source)
  run('systemctl','daemon-reload');run('systemctl','enable',name);run('systemctl','restart' if changed else 'start',name)
-for directory in ['bin','data','data/netbird','deploy','logs','vendor']:(ROOT/directory).mkdir(parents=True,exist_ok=True)
+for directory in ['bin','data','deploy','logs','vendor']:(ROOT/directory).mkdir(parents=True,exist_ok=True)
 if not (ROOT/'.link-owned').exists():raise RuntimeError('Deployment directory requires ownership marker')
 for binary in ['bin/link-server','vendor/netbird-server','vendor/netbird']:(ROOT/binary).chmod(0o755)
 cfg_path=DATA/'config.json'
 if not cfg_path.exists():run(str(ROOT/'bin/link-server'),'-data',str(DATA),'-command','init','-public-host',host)
+(DATA/'netbird').mkdir(exist_ok=True)
 cfg=json.loads(cfg_path.read_text())
 network_config=DATA/'netbird.yaml'
 if not network_config.exists():

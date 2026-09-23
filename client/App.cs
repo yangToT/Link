@@ -22,6 +22,8 @@ internal static class Program {
   if(args.Contains("--service")){ServiceBase.Run(new Agent());return;}
   if(args.Contains("--self-test")){SelfTest.Run();return;}
   if(args.Contains("--tray-test")){SelfTest.Tray();return;}
+  if(args.Contains("--network-check")){Console.WriteLine(Common.Json(NetworkDiscovery.Discover("")));return;}
+  if(args.Contains("--cleanup-layer2")){Common.ProtectFolder();var layer=new Layer2();layer.Recover();if(Common.Text(layer.Status,"state")=="cleanup-failed")throw new InvalidOperationException("二层资源清理未完成，保留恢复记录");return;}
   if(args.Length==2&&args[0]=="--check-server"){var config=Common.Parse(File.ReadAllText(args[1]));Common.Request(Common.Text(config,"server")+"/health",Common.Text(config,"pin"),"",null);bool rejected=false;try{Common.Request(Common.Text(config,"server")+"/health",new string('0',64),"",null);}catch(System.Net.WebException){rejected=true;}if(!rejected)throw new Exception("Wrong CA pin accepted");Console.WriteLine("PASS: real server pinned TLS; wrong fingerprint rejected");return;}
   if(args.Contains("--render")){var window=new MainWindow(true);window.RenderImage();return;}
   if(args.Contains("--preview")){new Application().Run(new MainWindow(true));return;}
@@ -37,11 +39,15 @@ internal static class Program {
  }
  internal static void Install(){
   string directory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"Link");Directory.CreateDirectory(directory);
-  foreach(string name in new[]{"Link.exe","netbird.exe","wintun.dll","THIRD-PARTY-NOTICES.md","LICENSE"}){
+  foreach(string name in new[]{"Link.exe","Uninstall.exe","uninstall.ps1","netbird.exe","wintun.dll","THIRD-PARTY-NOTICES.md","LICENSE"}){
    string source=Path.Combine(Common.Bin,name);if(!File.Exists(source)){if(name.EndsWith(".exe"))throw new InvalidOperationException("安装包缺少 "+name);continue;}
    string target=Path.Combine(directory,name);if(!source.Equals(target,StringComparison.OrdinalIgnoreCase))File.Copy(source,target,true);
   }
   Common.ProtectFolder();bool exists=ServiceController.GetServices().Any(s=>s.ServiceName=="LinkAgent");
+  File.WriteAllText(Path.Combine(Common.Home,"install-owned.json"),Common.Json(Common.Map("program",directory,"version",Common.Version)));
+  using(var uninstall=Microsoft.Win32.Registry.LocalMachine.CreateSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Link.Client")){
+   uninstall.SetValue("DisplayName","Link");uninstall.SetValue("DisplayVersion",Common.Version);uninstall.SetValue("InstallLocation",directory);uninstall.SetValue("DisplayIcon",Path.Combine(directory,"Link.exe"));uninstall.SetValue("UninstallString",Common.Quote(Path.Combine(directory,"Uninstall.exe")));uninstall.SetValue("NoModify",1);uninstall.SetValue("NoRepair",1);
+  }
   if(!exists)Common.Run("sc.exe","create LinkAgent binPath= \"\\\""+Path.Combine(directory,"Link.exe")+"\\\" --service\" start= auto DisplayName= "+Common.Quote("Link 后台连接"));
   using(var service=new ServiceController("LinkAgent")){if(service.Status!=ServiceControllerStatus.Running){service.Start();service.WaitForStatus(ServiceControllerStatus.Running,TimeSpan.FromSeconds(20));}}
   Common.Run("sc.exe","failure LinkAgent reset= 86400 actions= restart/5000/restart/15000/restart/60000");
@@ -102,11 +108,18 @@ internal sealed class MainWindow : Window {
   status.Text=preview?"未连接":Common.Text(snapshot,"message","后台服务未安装");connection.Content=Common.Bool(snapshot,"wanted")?"断开":"连接";connection.IsEnabled=!busy;management.IsEnabled=online&&Common.Text(self,"role")=="admin";
   if(tray!=null){string tooltip="Link · "+status.Text;tray.Text=tooltip.Length>63?tooltip.Substring(0,63):tooltip;trayManagement.Enabled=management.IsEnabled;}
   string entryID=Common.Text(state,"entryId");if(self!=null&&entryID==Common.Text(self,"id")){body.Children.Add(Card(new TextBlock{Text="●  本机是网络入口",Foreground=accent,FontWeight=FontWeights.SemiBold}));}
+  var networkInfo=Common.Obj(snapshot,"network");string warning=Common.Text(networkInfo,"warning");if(warning!="")body.Children.Add(Label(warning));
+  if(Common.Text(state,"networkMode")=="bridged"){
+   var bridge=Common.Obj(snapshot,"layer2");body.Children.Add(Card(new TextBlock{Text="局域网接入 · "+Common.Text(bridge,"message","准备中")+"\n"+Common.Text(bridge,"ip"),TextWrapping=TextWrapping.Wrap}));
+  }
   if(activePage=="settings"){
    body.Children.Add(new TextBlock{Text="连接设置",FontSize=17,Margin=new Thickness(0,0,0,15)});
    autoStart.Content="开机启动后台连接";autoStart.IsChecked=Common.Bool(snapshot,"autoStart");autoStart.Margin=new Thickness(0,12,0,12);body.Children.Add(autoStart);
    autoConnect.Content="后台服务启动后自动连接";autoConnect.IsChecked=Common.Bool(snapshot,"autoConnect");autoConnect.Margin=new Thickness(0,12,0,12);body.Children.Add(autoConnect);
-   body.Children.Add(Button("保存设置",async()=>await Execute(Common.Map("action","settings","autoStart",autoStart.IsChecked==true,"autoConnect",autoConnect.IsChecked==true))));
+   body.Children.Add(Label("入口与隧道使用的物理网卡"));var adapterChoice=new ComboBox{Margin=new Thickness(0,0,0,12)};adapterChoice.Items.Add(new ComboBoxItem{Content="自动选择（多网卡时需手动指定）",Tag=""});adapterChoice.SelectedIndex=0;
+   foreach(var adapter in Common.Items(networkInfo,"adapters")){var item=new ComboBoxItem{Content=Common.Text(adapter,"name")+" · "+Common.Text(adapter,"ip")+(Common.Text(adapter,"kind")=="wifi"?" · Wi-Fi":""),Tag=Common.Text(adapter,"id")};adapterChoice.Items.Add(item);if(Common.Text(adapter,"id")==Common.Text(snapshot,"entryAdapterId"))adapterChoice.SelectedItem=item;}body.Children.Add(adapterChoice);
+   if(Common.Bool(networkInfo,"tunDetected"))body.Children.Add(Label("检测到代理 / TUN；局域网接入会检查隧道出口，不修改代理配置。"));
+   body.Children.Add(Button("保存设置",async()=>await Execute(Common.Map("action","settings","autoStart",autoStart.IsChecked==true,"autoConnect",autoConnect.IsChecked==true,"entryAdapterId",Convert.ToString(((ComboBoxItem)adapterChoice.SelectedItem).Tag)))));
    body.Children.Add(new TextBlock{Text="最小化或关闭窗口会收起到托盘，双击托盘图标可恢复。\n退出界面后，连接仍由后台服务维持。\n主动断开或被踢下线后，需要手动连接。",Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,22,0,0)});return;
   }
   if(!registered){
@@ -116,6 +129,7 @@ internal sealed class MainWindow : Window {
   }
   if(activePage=="services"){
    body.Children.Add(new TextBlock{Text="本机服务",FontSize=17,Margin=new Thickness(0,0,0,16)});
+   if(Common.Text(state,"networkMode")=="bridged"){var layer=Common.Obj(snapshot,"layer2");body.Children.Add(Label(Common.Text(layer,"message")));body.Children.Add(Label("局域网地址："+Common.Text(layer,"ip","等待分配")));body.Children.Add(Label("通过局域网地址和应用自身端口访问，无需添加映射。\n应用监听地址与系统防火墙仍需允许访问。"));return;}
    var mappings=Common.Items(state,"mappings").Where(m=>Common.Text(m,"deviceId")==Common.Text(self,"id")).ToList();
    if(mappings.Count==0)body.Children.Add(Label("暂无已发布服务，请在管理中心添加映射。"));
    foreach(var m in mappings){var stack=new StackPanel();stack.Children.Add(new TextBlock{Text=Common.Text(m,"name"),FontWeight=FontWeights.SemiBold});stack.Children.Add(Label("本机 TCP "+Common.Text(m,"port")+"  ·  "+MappingStatus(Common.Text(m,"state"))));body.Children.Add(Card(stack));}return;
@@ -161,11 +175,14 @@ internal static class SelfTest {
   }));app.Run(window);
  }
  internal static void Run(){
+  NetworkDiscovery.Test();
+  Layer2Tests.Run();
+  EventStream.Test();
   Common.ValidateEndpoint("https://203.0.113.1:24443");bool rejected=false;try{Common.ValidateEndpoint("http://203.0.113.1");}catch{rejected=true;}if(!rejected)throw new Exception("plaintext accepted");
   if(Agent.Private(IPAddress.Parse("8.8.8.8"))||!Agent.Private(IPAddress.Parse("172.18.1.1")))throw new Exception("network classification");
   var value=Common.Map("message","test","enabled",true,"items",new[]{Common.Map("id","one")});var roundtrip=Common.Parse(Common.Json(value));if(!Common.Bool(roundtrip,"enabled")||Common.Items(roundtrip,"items").Count()!=1)throw new Exception("IPC serialization");
   TestRelay();using(var process=Process.Start(new ProcessStartInfo(System.Reflection.Assembly.GetExecutingAssembly().Location,"--job-child"){UseShellExecute=false,CreateNoWindow=true})){using(var job=new ProcessJob()){job.Add(process);}if(!process.WaitForExit(5000))throw new Exception("Child survived job termination");}
-  File.WriteAllText(Path.Combine(Common.Bin,"self-test-result.txt"),"PASS: endpoint validation, private network selection, IPC serialization, real TCP half-close roundtrip, kernel child termination\n");
+  File.WriteAllText(Path.Combine(Common.Bin,"self-test-result.txt"),"PASS: SSE framing/auth/reconnect/revocation and state ordering, physical adapter selection, layer2 recovery, endpoint validation, IPC, TCP half-close, child termination\n");
  }
  static void TestRelay(){
   var front=new System.Net.Sockets.TcpListener(IPAddress.Loopback,0);var back=new System.Net.Sockets.TcpListener(IPAddress.Loopback,0);front.Start();back.Start();

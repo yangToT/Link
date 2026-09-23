@@ -16,13 +16,14 @@ import (
 )
 
 type Config struct {
-	PublicURL     string `json:"publicUrl"`
-	PublicListen  string `json:"publicListen"`
-	PrivateListen string `json:"privateListen"`
-	PrivateURL    string `json:"privateUrl"`
-	BackendURL    string `json:"backendUrl"`
-	BackendToken  string `json:"backendToken"`
-	AllGroup      string `json:"allGroup"`
+	PublicURL     string        `json:"publicUrl"`
+	PublicListen  string        `json:"publicListen"`
+	PrivateListen string        `json:"privateListen"`
+	PrivateURL    string        `json:"privateUrl"`
+	BackendURL    string        `json:"backendUrl"`
+	BackendToken  string        `json:"backendToken"`
+	AllGroup      string        `json:"allGroup"`
+	Layer2        *Layer2Config `json:"layer2,omitempty"`
 }
 type Device struct {
 	ID            string            `json:"id"`
@@ -40,6 +41,8 @@ type Device struct {
 	Connected     bool              `json:"connected"`
 	MappingStates map[string]string `json:"mappingStates,omitempty"`
 	Applications  []Application     `json:"applications"`
+	Network       NetworkReport     `json:"network"`
+	Layer2        Layer2Status      `json:"layer2"`
 }
 type Application struct {
 	Name string `json:"name"`
@@ -64,17 +67,19 @@ type Event struct {
 	Device string    `json:"device"`
 }
 type State struct {
-	Devices  []Device  `json:"devices"`
-	Joins    []Join    `json:"joins"`
-	EntryID  string    `json:"entryId"`
-	RouteIDs []string  `json:"routeIds"`
-	Mappings []Mapping `json:"mappings"`
-	Events   []Event   `json:"events"`
+	Devices     []Device  `json:"devices"`
+	Joins       []Join    `json:"joins"`
+	EntryID     string    `json:"entryId"`
+	RouteIDs    []string  `json:"routeIds"`
+	Mappings    []Mapping `json:"mappings"`
+	Events      []Event   `json:"events"`
+	NetworkMode string    `json:"networkMode,omitempty"`
 }
 type Store struct {
 	sync.Mutex
-	path string
-	Data State
+	path     string
+	Data     State
+	onChange func()
 }
 
 func openStore(path string) (*Store, error) {
@@ -96,7 +101,11 @@ func (s *Store) persist() error {
 	if e != nil {
 		return e
 	}
-	return atomicWrite(s.path, b, 0600)
+	err := atomicWrite(s.path, b, 0600)
+	if err == nil && s.onChange != nil {
+		s.onChange()
+	}
+	return err
 }
 func atomicWrite(path string, b []byte, mode os.FileMode) error {
 	if e := os.MkdirAll(filepath.Dir(path), 0700); e != nil {
@@ -150,6 +159,9 @@ func publicDevice(d Device) Device {
 	d.GroupID = ""
 	d.PeerID = ""
 	d.Connected = d.Connected && d.State == "active" && time.Since(d.LastSeen) < 35*time.Second
+	if !d.Connected && d.Layer2.State != "" {
+		d.Layer2 = Layer2Status{State: "off", Message: "设备离线，局域网状态待确认"}
+	}
 	return d
 }
 func privateIP(s string) bool {

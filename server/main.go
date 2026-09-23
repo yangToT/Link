@@ -29,12 +29,15 @@ import (
 //go:embed web/index.html web/app.js web/style.css
 var assets embed.FS
 
+var version = "0.2.0-alpha.1"
+
 type Session struct {
 	Device  string
 	CSRF    string
 	Expires time.Time
 }
 type App struct {
+	events    *eventHub
 	cfg       Config
 	store     *Store
 	backend   *Backend
@@ -54,7 +57,9 @@ func newApp(cfg Config, s *Store, ca []byte) *App {
 		h := sha256.Sum256(p.Bytes)
 		pin = hex.EncodeToString(h[:])
 	}
-	return &App{cfg: cfg, store: s, backend: &Backend{URL: cfg.BackendURL, Token: cfg.BackendToken}, ca: ca, pin: pin, sessions: map[string]Session{}, tickets: map[string]Session{}, limits: map[string][]time.Time{}}
+	events := newEventHub()
+	s.onChange = events.notify
+	return &App{events: events, cfg: cfg, store: s, backend: &Backend{URL: cfg.BackendURL, Token: cfg.BackendToken}, ca: ca, pin: pin, sessions: map[string]Session{}, tickets: map[string]Session{}, limits: map[string][]time.Time{}}
 }
 func main() {
 	dir := flag.String("data", "./data", "instance directory")
@@ -135,6 +140,7 @@ func main() {
 	}
 	log.Print("Link started; web assets are embedded; private management listener enabled")
 	<-ctx.Done()
+	close(app.events.done)
 	stop, c := context.WithTimeout(context.Background(), 10*time.Second)
 	defer c()
 	_ = pub.Shutdown(stop)
@@ -219,7 +225,7 @@ func (a *App) consumeJoins() {
 func (a *App) public() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]string{"service": "Link", "status": "running"})
+		writeJSON(w, 200, map[string]string{"service": "Link", "status": "running", "version": version})
 	})
 	mux.HandleFunc("GET /bootstrap/ca", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-pem-file")
@@ -228,7 +234,9 @@ func (a *App) public() http.Handler {
 	mux.HandleFunc("POST /agent/enroll", a.enroll)
 	mux.HandleFunc("POST /agent/reconnect", a.reconnect)
 	mux.HandleFunc("POST /agent/heartbeat", a.heartbeat)
+	mux.HandleFunc("GET /agent/events", a.agentEvents)
 	mux.HandleFunc("POST /agent/browser-ticket", a.browserTicket)
+	mux.HandleFunc("POST /agent/layer2", a.layer2Plan)
 	target, e := url.Parse(a.cfg.BackendURL)
 	if e == nil && target.Host != "" {
 		proxy := httputil.NewSingleHostReverseProxy(target)
@@ -375,6 +383,8 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 		LANIP         string            `json:"lanIp"`
 		MappingStates map[string]string `json:"mappingStates"`
 		Applications  []Application     `json:"applications"`
+		Network       NetworkReport     `json:"network"`
+		Layer2        Layer2Status      `json:"layer2"`
 	}
 	if !body(w, r, &req) {
 		return
@@ -387,16 +397,30 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if d.State != "active" {
-		writeJSON(w, 200, map[string]string{"action": "disconnect"})
+		writeJSON(w, 200, a.agentState(d))
 		return
 	}
 	d.LastSeen = time.Now().UTC()
-	if privateIP(req.LANIP) {
+	d.Network = cleanNetworkReport(req.Network)
+	d.Layer2 = cleanLayer2Status(req.Layer2)
+	oldLAN := d.LANIP
+	d.LANIP = ""
+	if privateIP(req.LANIP) && d.Network.AdapterID != "" && (d.Network.Kind == "ethernet" || d.Network.Kind == "wifi") {
 		d.LANIP = req.LANIP
+	}
+	if oldLAN != d.LANIP && a.store.Data.EntryID == d.ID {
+		for _, id := range a.store.Data.RouteIDs {
+			if a.backend.removeRoute(id) != nil {
+				d.LANIP = oldLAN
+				failure(w, 503, "入口变更后的旧路由尚未撤销")
+				return
+			}
+		}
+		a.store.Data.RouteIDs = nil
 	}
 	d.Networks = []string{}
 	for _, n := range req.Networks {
-		if validNetwork(n) && len(d.Networks) < 16 {
+		if d.LANIP != "" && validNetwork(n) && len(d.Networks) < 16 {
 			d.Networks = append(d.Networks, n)
 		}
 	}
@@ -409,20 +433,8 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 			d.Applications = append(d.Applications, app)
 		}
 	}
-	devices := []Device{}
-	for _, p := range a.store.Data.Devices {
-		devices = append(devices, publicDevice(p))
-	}
-	forwards := []map[string]any{}
-	if a.store.Data.EntryID == d.ID && privateIP(d.LANIP) {
-		for _, m := range a.store.Data.Mappings {
-			target := a.store.device(m.DeviceID)
-			if target != nil && target.State == "active" && target.IP != "" {
-				forwards = append(forwards, map[string]any{"id": m.ID, "listenIp": d.LANIP, "listenPort": m.EntryPort, "targetIp": target.IP, "targetPort": m.Port})
-			}
-		}
-	}
-	writeJSON(w, 200, map[string]any{"action": "keep", "device": publicDevice(*d), "devices": devices, "entryId": a.store.Data.EntryID, "forwards": forwards, "mappings": a.store.Data.Mappings, "privateUrl": a.cfg.PrivateURL})
+	a.events.notify()
+	writeJSON(w, 200, a.agentState(d))
 }
 func (a *App) browserTicket(w http.ResponseWriter, r *http.Request) {
 	a.store.Lock()
@@ -520,14 +532,18 @@ func (a *App) adminAPI(w http.ResponseWriter, r *http.Request) {
 		failure(w, 403, "请求校验失败")
 		return
 	}
+	if r.Method == "GET" && r.URL.Path == "/api/events" {
+		a.adminEvents(w, r, session)
+		return
+	}
 	if r.Method == "GET" && r.URL.Path == "/api/state" {
 		a.store.Lock()
 		defer a.store.Unlock()
-		devices := []Device{}
-		for _, d := range a.store.Data.Devices {
-			devices = append(devices, publicDevice(d))
-		}
-		writeJSON(w, 200, map[string]any{"devices": devices, "entryId": a.store.Data.EntryID, "mappings": a.store.Data.Mappings, "events": a.store.Data.Events, "csrf": session.CSRF})
+		writeJSON(w, 200, a.adminState(session.CSRF))
+		return
+	}
+	if r.Method == "POST" && r.URL.Path == "/api/network-mode" {
+		a.networkMode(w, r)
 		return
 	}
 	if r.Method == "POST" && r.URL.Path == "/api/joins" {
@@ -599,6 +615,23 @@ func (a *App) deviceAction(w http.ResponseWriter, r *http.Request, self string) 
 			failure(w, 409, "设备需要在线并报告可用的本地网络")
 			return
 		}
+		if a.store.Data.NetworkMode == "bridged" {
+			if !d.Network.BridgeEligible {
+				failure(w, 409, "二层入口必须使用可用的有线物理网卡")
+				return
+			}
+			if a.store.Data.EntryID != d.ID {
+				for i := range a.store.Data.Devices {
+					peer := &a.store.Data.Devices[i]
+					if a.cfg.Layer2.revoke(peer, peer.ID == a.store.Data.EntryID) != nil {
+						failure(w, 503, "旧二层连接尚未撤销")
+						return
+					}
+				}
+			}
+			a.store.Data.EntryID = d.ID
+			break
+		}
 		created := []string{}
 		for _, network := range d.Networks {
 			id, e := a.backend.route(d, network, a.cfg.AllGroup)
@@ -625,6 +658,10 @@ func (a *App) deviceAction(w http.ResponseWriter, r *http.Request, self string) 
 	case "kick", "disable":
 		if d.ID == self {
 			failure(w, 409, "不能断开当前管理设备，请从其他管理员设备操作")
+			return
+		}
+		if a.store.Data.NetworkMode == "bridged" && a.cfg.Layer2.revoke(d, d.ID == a.store.Data.EntryID) != nil {
+			failure(w, 503, "二层访问撤销未完成")
 			return
 		}
 		if e := a.backend.revokeGroup(d.GroupID); e != nil {
@@ -665,6 +702,10 @@ func (a *App) addMapping(w http.ResponseWriter, r *http.Request) {
 	}
 	a.store.Lock()
 	defer a.store.Unlock()
+	if a.store.Data.NetworkMode == "bridged" {
+		failure(w, 409, "二层模式使用设备的局域网地址，无需端口映射")
+		return
+	}
 	d := a.store.device(req.DeviceID)
 	entry := a.store.device(a.store.Data.EntryID)
 	if len(a.store.Data.Mappings) >= 100 {
@@ -721,6 +762,7 @@ func (a *App) reconcile(ctx context.Context) {
 		}
 		a.sessionMu.Unlock()
 		a.syncPeers()
+		a.revokeExpiredLayer2()
 		select {
 		case <-ctx.Done():
 			return
