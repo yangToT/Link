@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -14,8 +14,9 @@ using System.Text;
 using System.Web.Script.Serialization;
 
 namespace Link {
+internal sealed class CommandFailure : InvalidOperationException { internal readonly int ExitCode; internal CommandFailure(int code):base("系统操作失败，退出码 "+code){ExitCode=code;} }
 internal static class Common {
- internal const string Version = "0.2.0-alpha.7";
+ internal const string Version = "0.2.0-alpha.8";
  internal static readonly string Home = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Link");
  internal static string Bin { get { return AppDomain.CurrentDomain.BaseDirectory; } }
  internal static Dictionary<string, object> Map(params object[] pairs) { var d=new Dictionary<string,object>();for(int i=0;i<pairs.Length;i+=2)d[(string)pairs[i]]=pairs[i+1];return d; }
@@ -40,7 +41,7 @@ internal static class Common {
  internal static string Run(string exe,string args,int timeout=15000,params int[] acceptedExitCodes){
   var output=new StringBuilder();using(var p=new Process()){p.StartInfo=new ProcessStartInfo(exe,args){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
    p.OutputDataReceived+=(s,e)=>{if(e.Data!=null)lock(output)output.AppendLine(e.Data);};p.ErrorDataReceived+=(s,e)=>{};p.Start();p.BeginOutputReadLine();p.BeginErrorReadLine();
-   if(!p.WaitForExit(timeout)){p.Kill();throw new InvalidOperationException("操作超时");}p.WaitForExit();if(p.ExitCode!=0&&!acceptedExitCodes.Contains(p.ExitCode))throw new InvalidOperationException("系统操作失败，退出码 "+p.ExitCode);return output.ToString();}
+   if(!p.WaitForExit(timeout)){p.Kill();throw new InvalidOperationException("操作超时");}p.WaitForExit();if(p.ExitCode!=0&&!acceptedExitCodes.Contains(p.ExitCode))throw new CommandFailure(p.ExitCode);return output.ToString();}
  }
  internal static Dictionary<string,object> Pipe(Dictionary<string,object> command){using(var pipe=new NamedPipeClientStream(".","Link.Agent",PipeDirection.InOut,PipeOptions.None)){pipe.Connect(2500);var writer=new StreamWriter(pipe,new UTF8Encoding(false)){AutoFlush=true};var reader=new StreamReader(pipe,Encoding.UTF8);writer.WriteLine(Json(command));string line=reader.ReadLine();if(line==null)throw new IOException("后台服务未响应");var result=Parse(line);if(result.ContainsKey("error"))throw new InvalidOperationException(Text(result,"error"));return result;}}
  internal static void ValidateEndpoint(string endpoint){Uri uri;IPAddress ip;if(!Uri.TryCreate(endpoint,UriKind.Absolute,out uri)||uri.Scheme!="https"||!IPAddress.TryParse(uri.Host,out ip)||uri.AbsolutePath!="/"||uri.UserInfo!=""||uri.Query!=""||uri.Fragment!="")throw new InvalidOperationException("请输入 HTTPS 服务端 IP 地址，例如 https://203.0.113.10:24443");}

@@ -185,6 +185,9 @@ if($Layer2Only){
     if(Test-Path -LiteralPath $componentRoot){Remove-Item -LiteralPath $componentRoot -Recurse -Force}
     foreach($name in @('layer2-local.bin','layer2-install.json','layer2-server.pem','layer2-driver-install-evidence.txt')){Remove-Item -LiteralPath (Join-Path $data $name) -Force -ErrorAction SilentlyContinue}
     if(-not $KeepComponentCache){$cache=[IO.Path]::GetFullPath((Join-Path $data 'component-downloads'));if($cache -ne ([IO.Path]::GetFullPath((Join-Path $env:ProgramData 'Link'))+'\component-downloads')){throw 'Unsafe cache path'};Assert-Tree $cache;if(Test-Path -LiteralPath $cache){Remove-Item -LiteralPath $cache -Recurse -Force}}
+    $driverWork=[IO.Path]::GetFullPath((Join-Path $data 'driver-work'))
+    if($driverWork -ne ([IO.Path]::GetFullPath((Join-Path $env:ProgramData 'Link'))+'\driver-work')){throw 'Unsafe driver helper path'}
+    Assert-Tree $driverWork;if(Test-Path -LiteralPath $driverWork){Remove-Item -LiteralPath $driverWork -Recurse -Force}
     if(Test-Path -LiteralPath $componentRoot){throw 'Component files remain'}
     Write-Output 'Optional LAN components removed; Link identity and base connection retained.';return
 }

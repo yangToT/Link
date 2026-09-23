@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -12,6 +12,8 @@ internal static class Layer2Tests {
    badgeDevice["connected"]=false;if(!MainWindow.LanBadge(badgeDevice).Contains("离线"))throw new Exception("Offline LAN state presented as live");
   }
   if(!MainWindow.LanBadge(Common.Map("connected",true,"layer2",Common.Map("prepared",true,"enabled",false))).Contains("未开启"))throw new Exception("Installed components presented as enabled");
+  if(Layer2.AvailableNic("Name|VPN127\nName|VPN125",new[]{"VPN Client Adapter - VPN126"})!="VPN124")throw new Exception("Occupied NIC name selected");
+  if(Layer2.AvailableNic(string.Join(" ",Enumerable.Range(2,126).Select(n=>"VPN"+n)),new string[0])!="VPN")throw new Exception("Regulated base name invalid");
   string expected="Test Ethernet (ID=2814777680)";
   if(Layer2.BridgeDevice("Test Ethernet","{11111111-1111-1111-1111-111111111111}","Device Name|"+expected+"\r\n")!=expected)throw new Exception("SoftEther adapter ID mismatch");
   bool refused=false;try{Layer2.BridgeDevice("Test Ethernet","{22222222-2222-2222-2222-222222222222}",expected);}catch(InvalidOperationException){refused=true;}if(!refused)throw new Exception("Wrong physical adapter accepted");
@@ -37,6 +39,15 @@ internal static class Layer2Tests {
    layer=new Layer2(directory,()=>Common.Map(),cli,guard);layer.Recover();
    if(File.Exists(file)||Common.Text(layer.Status,"state")!="off"||commands.Count(c=>c.StartsWith("AccountDelete"))!=deletedAccounts)throw new Exception("Restart recovery not idempotent");
    int count=commands.Count;layer.Stop();if(commands.Count!=count)throw new Exception("Clean disconnect changed resources");
+   foreach(int code in new[]{30,32,31}){
+    File.WriteAllText(file,Common.Json(Common.Map("account","Link-ABCDEF012345","nic","VPN127","role","member")));
+    var called=new List<string>();
+    layer=new Layer2(directory,()=>Common.Map(),(c,e,t,x)=>{called.Add(t);if(t.StartsWith("NicCreate "))throw new CommandFailure(code);return "";},guard);
+    try{layer.CreateNic(Common.Map());throw new Exception("Creation should fail");}catch(InvalidOperationException){}
+    layer.Stop();if(called.Any(t=>t.StartsWith("NicDelete")||t.StartsWith("NicDisable")))throw new Exception("Failed creation deleted an unowned NIC");
+    if(File.Exists(file)!=(code==31))throw new Exception("Ambiguous NIC outcome recovery incorrect");
+    if(File.Exists(file))File.Delete(file);
+   }
   }finally{Directory.Delete(directory,true);}
  }
  static void Reject(Dictionary<string,object> plan,Dictionary<string,object> local,string expected){try{Layer2.ValidatePlan(plan,local);}catch(InvalidOperationException e){if(e.Message.Contains(expected))return;throw;}throw new Exception("Unsafe plan accepted");}

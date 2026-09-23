@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -18,6 +18,9 @@ internal static class Program {
  [STAThread] public static void Main(string[] args){try{Start(args);}catch(Exception e){string folder=Components.Administrator?Common.Bin:Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Link");Directory.CreateDirectory(folder);File.WriteAllText(Path.Combine(folder,"startup-error.txt"),e.GetType().FullName+"\n"+e.Message+"\n"+e.StackTrace);Environment.ExitCode=1;}}
  static void Start(string[] args){
   ServicePointManager.SecurityProtocol=SecurityProtocolType.Tls12;
+  if(args.Length==6&&args[0]=="--prepare-update"){if(ProgressWindow.Run("准备更新",report=>{report("正在校验发布记录和下载文件…");Updates.Prepare(args[1],args[2],args[3],int.Parse(args[4]),long.Parse(args[5]));},"更新包已校验","",true))Updates.StartWorker(args[3]);else Environment.ExitCode=1;return;}
+  if(args.Length==2&&args[0]=="--apply-update"){Updates.Apply(args[1]);return;}
+  if(args.Length==2&&args[0]=="--watch-update"){Updates.Watch(args[1]);return;}
   if(args.Contains("--start-service")){Components.StartAgent();return;}
   if(args.Contains("--install-core")){if(!Components.Administrator)throw new InvalidOperationException("需要管理员权限");if(!ProgressWindow.Run("安装基础组件",report=>{report("正在更新程序并启动 Link 后台…");Install();},"基础组件已更新",""))Environment.ExitCode=1;return;}
   if(args.Length==2&&args[0]=="--components"){Components.Worker(args[1]);return;}
@@ -31,6 +34,8 @@ internal static class Program {
   if(args.Contains("--layer2-check")){Layer2.CheckComponents();Console.WriteLine("PASS: authenticated local Client and Bridge management; no connections created");return;}
   if(args.Contains("--cleanup-layer2")){Common.ProtectFolder();var layer=new Layer2();layer.Recover();if(Common.Text(layer.Status,"state")=="cleanup-failed")throw new InvalidOperationException("二层资源清理未完成，保留恢复记录");return;}
   if(args.Length==2&&args[0]=="--check-server"){var config=Common.Parse(File.ReadAllText(args[1]));Common.Request(Common.Text(config,"server")+"/health",Common.Text(config,"pin"),"",null);bool rejected=false;try{Common.Request(Common.Text(config,"server")+"/health",new string('0',64),"",null);}catch(System.Net.WebException){rejected=true;}if(!rejected)throw new Exception("Wrong CA pin accepted");Console.WriteLine("PASS: real server pinned TLS; wrong fingerprint rejected");return;}
+  if(args.Contains("--update-check")){var release=Updates.Check();Console.WriteLine(release==null?"PASS: update feed read; no newer compatible release":"PASS: compatible update "+release.Version);return;}
+  if(args.Contains("--render-update")){new MainWindow(true).RenderUpdateImage(false);new MainWindow(true).RenderUpdateImage(true);return;}
   if(args.Contains("--render")){var window=new MainWindow(true);window.RenderImage();return;}
   if(args.Contains("--render-components")){new MainWindow(true).RenderComponentsImage(false);new MainWindow(true).RenderComponentsImage(true);return;}
   if(args.Contains("--preview")){new Application().Run(new MainWindow(true));return;}
@@ -44,40 +49,50 @@ internal static class Program {
    }
   }
  }
- internal static void Install(){
+ internal static void Install(){InstallFrom(Common.Bin,Common.Version,null);}
+ internal static void InstallFrom(string sourceDirectory,string version,Action verify){
   if(!Components.Administrator){Components.Elevate("--install-core");return;}
   using(var mutex=new System.Threading.Mutex(false,"Global\\Link.ComponentMaintenance")){
-   bool acquired=false;try{try{acquired=mutex.WaitOne(0);}catch(System.Threading.AbandonedMutexException){acquired=true;}if(!acquired)throw new InvalidOperationException("已有安装或卸载操作正在进行");InstallCore();}finally{if(acquired)mutex.ReleaseMutex();}
+   bool acquired=false;try{try{acquired=mutex.WaitOne(0);}catch(System.Threading.AbandonedMutexException){acquired=true;}if(!acquired)throw new InvalidOperationException("已有安装或卸载操作正在进行");InstallCore(sourceDirectory,version,verify);}finally{if(acquired)mutex.ReleaseMutex();}
   }
  }
- static void InstallCore(){
+ static void InstallCore(string sourceDirectory,string version,Action verify){
   string directory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"Link");Directory.CreateDirectory(directory);
-  string[] files={"Link.exe","Uninstall.exe","uninstall.ps1","netbird.exe","wintun.dll","THIRD-PARTY-NOTICES.md","LICENSE"};
-  foreach(string name in files)if(!File.Exists(Path.Combine(Common.Bin,name)))throw new InvalidOperationException("安装包缺少 "+name);
-  if((File.GetAttributes(directory)&FileAttributes.ReparsePoint)!=0)throw new InvalidOperationException("安装目录需要人工检查");
+  string[] files=Updates.PayloadFiles(sourceDirectory);
+  string metadataPath=Path.Combine(Common.Home,"install-owned.json");string oldMetadata=File.Exists(metadataPath)?File.ReadAllText(metadataPath):"";
+  string oldDisplayVersion=null;using(var oldKey=Microsoft.Win32.Registry.LocalMachine.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Link.Client"))if(oldKey!=null)oldDisplayVersion=Convert.ToString(oldKey.GetValue("DisplayVersion"));
+  foreach(string name in files)if(!File.Exists(Path.Combine(sourceDirectory,name)))throw new InvalidOperationException("安装包缺少 "+name);
+  Updates.CheckTargets(directory,files);
   Common.ProtectFolder();string backup=Path.Combine(Common.Home,"backups","core-"+DateTime.UtcNow.ToString("yyyyMMddHHmmssfff"));Directory.CreateDirectory(backup);
-  foreach(string name in files){string target=Path.Combine(directory,name);if(File.Exists(target)){if((File.GetAttributes(target)&FileAttributes.ReparsePoint)!=0)throw new InvalidOperationException("安装文件需要人工检查");File.Copy(target,Path.Combine(backup,name));}}
+  foreach(string name in files){string target=Path.Combine(directory,name);if(File.Exists(target)){if((File.GetAttributes(target)&FileAttributes.ReparsePoint)!=0)throw new InvalidOperationException("安装文件需要人工检查");Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(backup,name)));File.Copy(target,Path.Combine(backup,name));}}
+  bool resumeConnection=false;try{resumeConnection=Common.Bool(Common.Pipe(Common.Map("action","status")),"wanted");}catch{}
   bool exists=ServiceController.GetServices().Any(s=>s.ServiceName=="LinkAgent");
   if(exists){using(var key=Microsoft.Win32.Registry.LocalMachine.OpenSubKey("SYSTEM\\CurrentControlSet\\Services\\LinkAgent")){if(Convert.ToString(key.GetValue("ImagePath"))!=Common.Quote(Path.Combine(directory,"Link.exe"))+" --service")throw new InvalidOperationException("后台服务属于另一安装，拒绝替换");}using(var s=new ServiceController("LinkAgent")){if(s.Status!=ServiceControllerStatus.Stopped){s.Stop();s.WaitForStatus(ServiceControllerStatus.Stopped,TimeSpan.FromSeconds(150));}}}
   try{
+  if(File.Exists(Path.Combine(Common.Home,"layer2-journal.json")))throw new InvalidOperationException("网络清理未完成，已取消更新并保留旧版本");
   Components.SetOwner();
-  if(!Path.GetFullPath(Common.Bin).TrimEnd('\\').Equals(directory,StringComparison.OrdinalIgnoreCase))foreach(var process in Process.GetProcessesByName("Link")){try{if(process.Id!=Process.GetCurrentProcess().Id&&process.SessionId!=0&&process.MainModule.FileName.Equals(Path.Combine(directory,"Link.exe"),StringComparison.OrdinalIgnoreCase)){process.Kill();process.WaitForExit(5000);}}finally{process.Dispose();}}
+  if(!Path.GetFullPath(sourceDirectory).TrimEnd('\\').Equals(directory,StringComparison.OrdinalIgnoreCase))foreach(var process in Process.GetProcessesByName("Link")){try{if(process.Id!=Process.GetCurrentProcess().Id&&process.SessionId!=0&&process.MainModule.FileName.Equals(Path.Combine(directory,"Link.exe"),StringComparison.OrdinalIgnoreCase)){process.Kill();process.WaitForExit(5000);}}finally{process.Dispose();}}
   foreach(string name in files){
-   string source=Path.Combine(Common.Bin,name);if(!File.Exists(source)){if(name.EndsWith(".exe"))throw new InvalidOperationException("安装包缺少 "+name);continue;}
-   string target=Path.Combine(directory,name);if(!source.Equals(target,StringComparison.OrdinalIgnoreCase))File.Copy(source,target,true);
+   string source=Path.Combine(sourceDirectory,name);if(!File.Exists(source)){if(name.EndsWith(".exe"))throw new InvalidOperationException("安装包缺少 "+name);continue;}
+   string target=Path.Combine(directory,name);Directory.CreateDirectory(Path.GetDirectoryName(target));if(!source.Equals(target,StringComparison.OrdinalIgnoreCase))File.Copy(source,target,true);
   }
   Common.ProtectFolder();
-  File.WriteAllText(Path.Combine(Common.Home,"install-owned.json"),Common.Json(Common.Map("program",directory,"version",Common.Version)));
-  using(var uninstall=Microsoft.Win32.Registry.LocalMachine.CreateSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Link.Client")){
-   uninstall.SetValue("DisplayName","Link");uninstall.SetValue("DisplayVersion",Common.Version);uninstall.SetValue("InstallLocation",directory);uninstall.SetValue("DisplayIcon",Path.Combine(directory,"Link.exe"));uninstall.SetValue("UninstallString",Common.Quote(Path.Combine(directory,"Uninstall.exe")));uninstall.SetValue("NoModify",1);uninstall.SetValue("NoRepair",1);
-  }
   if(!exists)Common.Run("sc.exe","create LinkAgent binPath= \"\\\""+Path.Combine(directory,"Link.exe")+"\\\" --service\" start= auto DisplayName= "+Common.Quote("Link 后台连接"));
   using(var service=new ServiceController("LinkAgent")){if(service.Status!=ServiceControllerStatus.Running){service.Start();service.WaitForStatus(ServiceControllerStatus.Running,TimeSpan.FromSeconds(20));}}
+  if(verify!=null)verify();
   Common.Run("sc.exe","failure LinkAgent reset= 86400 actions= restart/5000/restart/15000/restart/60000");
-  }catch{
-   if(exists){using(var service=new ServiceController("LinkAgent")){if(service.Status!=ServiceControllerStatus.Stopped){service.Stop();service.WaitForStatus(ServiceControllerStatus.Stopped,TimeSpan.FromSeconds(150));}foreach(string name in files){string old=Path.Combine(backup,name);if(File.Exists(old)&&!Path.Combine(Common.Bin,name).Equals(Path.Combine(directory,name),StringComparison.OrdinalIgnoreCase))File.Copy(old,Path.Combine(directory,name),true);}service.Start();}}
-   throw;
+  var ownership=oldMetadata==""?Common.Map():Common.Parse(oldMetadata);ownership["program"]=directory;ownership["version"]=version;
+  File.WriteAllText(metadataPath,Common.Json(ownership));
+  using(var uninstall=Microsoft.Win32.Registry.LocalMachine.CreateSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Link.Client")){
+   uninstall.SetValue("DisplayName","Link");uninstall.SetValue("DisplayVersion",version);uninstall.SetValue("InstallLocation",directory);uninstall.SetValue("DisplayIcon",Path.Combine(directory,"Link.exe"));uninstall.SetValue("UninstallString",Common.Quote(Path.Combine(directory,"Uninstall.exe")));uninstall.SetValue("NoModify",1);uninstall.SetValue("NoRepair",1);
   }
+
+  }catch{
+   if(exists){using(var service=new ServiceController("LinkAgent")){if(service.Status!=ServiceControllerStatus.Stopped){service.Stop();service.WaitForStatus(ServiceControllerStatus.Stopped,TimeSpan.FromSeconds(150));}foreach(string name in files){string old=Path.Combine(backup,name);if(File.Exists(old)&&!Path.Combine(sourceDirectory,name).Equals(Path.Combine(directory,name),StringComparison.OrdinalIgnoreCase))File.Copy(old,Path.Combine(directory,name),true);else if(!File.Exists(old)&&File.Exists(Path.Combine(directory,name)))File.Delete(Path.Combine(directory,name));}service.Start();}}
+   if(oldMetadata!="")File.WriteAllText(metadataPath,oldMetadata);
+   if(oldDisplayVersion!=null)using(var oldKey=Microsoft.Win32.Registry.LocalMachine.CreateSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Link.Client"))oldKey.SetValue("DisplayVersion",oldDisplayVersion);
+   throw;
+  }finally{if(resumeConnection)try{if(!Common.Bool(Common.Pipe(Common.Map("action","status")),"wanted"))Common.Pipe(Common.Map("action","connect"));}catch{}}
  }
 }
 internal sealed partial class MainWindow : Window {
@@ -102,12 +117,12 @@ internal sealed partial class MainWindow : Window {
   var top=new DockPanel{Margin=new Thickness(0,0,0,20)};main.Children.Add(top);connection.Content="连接";StyleButton(connection);connection.Click+=async(s,e)=>await RunAction(connection,Connect);DockPanel.SetDock(connection,Dock.Right);top.Children.Add(connection);
   var headline=new StackPanel();headline.Children.Add(new TextBlock{Text="我的网络",FontSize=22,FontWeight=FontWeights.SemiBold});status.Text="未连接";status.Foreground=muted;status.Margin=new Thickness(0,7,0,0);headline.Children.Add(status);top.Children.Add(headline);
   var scroll=new ScrollViewer{VerticalScrollBarVisibility=ScrollBarVisibility.Auto,Content=body};Grid.SetRow(scroll,1);main.Children.Add(scroll);
-  var bottom=new StackPanel();Grid.SetRow(bottom,2);main.Children.Add(bottom);feedback.Foreground=muted;feedback.TextWrapping=TextWrapping.Wrap;feedback.Margin=new Thickness(0,8,0,8);bottom.Children.Add(feedback);actionProgress.Foreground=accent;bottom.Children.Add(actionProgress);
+  var bottom=new StackPanel();Grid.SetRow(bottom,2);main.Children.Add(bottom);feedback.Foreground=muted;feedback.TextWrapping=TextWrapping.Wrap;feedback.Margin=new Thickness(0,8,0,8);bottom.Children.Add(updateBanner);bottom.Children.Add(feedback);actionProgress.Foreground=accent;bottom.Children.Add(actionProgress);
   management.Content="打开管理中心  ↗";StyleButton(management);management.HorizontalAlignment=HorizontalAlignment.Stretch;management.Click+=async(s,e)=>await RunAction(management,OpenManagement);bottom.Children.Add(management);
-  SourceInitialized+=(s,e)=>Glass();Loaded+=async(s,e)=>{Render();if(!preview){InitializeTray();await Refresh();timer=new DispatcherTimer{Interval=TimeSpan.FromSeconds(3)};timer.Tick+=async(a,b)=>await Refresh();timer.Start();}};
+  SourceInitialized+=(s,e)=>Glass();Loaded+=async(s,e)=>{Render();if(!preview){InitializeTray();await Refresh();timer=new DispatcherTimer{Interval=TimeSpan.FromSeconds(3)};timer.Tick+=async(a,b)=>await Refresh();timer.Start();StartUpdates();}};
   StateChanged+=(s,e)=>{if(WindowState==WindowState.Minimized&&tray!=null)HideToTray();else if(WindowState!=WindowState.Minimized)restoredState=WindowState;};
   Closing+=(s,e)=>{if(!exiting&&tray!=null){e.Cancel=true;if(preview)HideToTray();else Dispatcher.BeginInvoke((Action)(async()=>await ChooseExit()));}};
-  Closed+=(s,e)=>{if(timer!=null)timer.Stop();if(tray!=null){tray.Visible=false;tray.ContextMenuStrip.Dispose();tray.Dispose();tray=null;}if(trayIcon!=null)trayIcon.Dispose();};
+  Closed+=(s,e)=>{if(timer!=null)timer.Stop();if(updateTimer!=null)updateTimer.Stop();if(updateCancel!=null)updateCancel.Cancel();if(tray!=null){tray.Visible=false;tray.ContextMenuStrip.Dispose();tray.Dispose();tray=null;}if(trayIcon!=null)trayIcon.Dispose();};
  }
  internal void InitializeTray(){
   if(tray!=null)return;
@@ -196,7 +211,7 @@ internal sealed partial class MainWindow : Window {
    foreach(var adapter in Common.Items(networkInfo,"adapters")){var item=new ComboBoxItem{Content=Common.Text(adapter,"name")+" · "+Common.Text(adapter,"ip")+(Common.Text(adapter,"kind")=="wifi"?" · Wi-Fi":""),Tag=Common.Text(adapter,"id")};adapterChoice.Items.Add(item);if(Common.Text(adapter,"id")==Common.Text(snapshot,"entryAdapterId"))adapterChoice.SelectedItem=item;}body.Children.Add(adapterChoice);
    if(Common.Bool(networkInfo,"tunDetected"))body.Children.Add(Label("检测到代理 / TUN；局域网接入会检查隧道出口，不修改代理配置。"));
    body.Children.Add(AsyncButton("保存设置",async()=>await Execute(Common.Map("action","settings","autoStart",autoStart.IsChecked==true,"autoConnect",autoConnect.IsChecked==true,"entryAdapterId",Convert.ToString(((ComboBoxItem)adapterChoice.SelectedItem).Tag)))));
-   body.Children.Add(new TextBlock{Text="最小化会收起到托盘；关闭时可选择是否停止后台。\n仅退出界面会保持连接；完全退出会先清理网络。\n主动断开或被踢下线后，需要手动连接。",Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,22,0,0)});return;
+   RenderUpdateSettings();body.Children.Add(new TextBlock{Text="最小化会收起到托盘；关闭时可选择是否停止后台。\n仅退出界面会保持连接；完全退出会先清理网络。\n主动断开或被踢下线后，需要手动连接。",Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,22,0,0)});return;
   }
   if(!registered){
    body.Children.Add(new TextBlock{Text="加入一个网络",FontSize=17,Margin=new Thickness(0,0,0,4)});body.Children.Add(new TextBlock{Text="输入自托管实例的地址与一次性加入码。",Foreground=muted});body.Children.Add(Label("服务端地址"));
@@ -288,7 +303,7 @@ internal static class SelfTest {
  }
  internal static void Run(){
   NetworkDiscovery.Test();
-  Layer2Tests.Run();
+  Layer2Tests.Run();UpdateTests.Run();
   EventStream.Test();
   Common.ValidateEndpoint("https://203.0.113.1:24443");bool rejected=false;try{Common.ValidateEndpoint("http://203.0.113.1");}catch{rejected=true;}if(!rejected)throw new Exception("plaintext accepted");
   if(Agent.Private(IPAddress.Parse("8.8.8.8"))||!Agent.Private(IPAddress.Parse("172.18.1.1")))throw new Exception("network classification");

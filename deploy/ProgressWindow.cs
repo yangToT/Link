@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -26,9 +26,9 @@ internal sealed class ProgressWindow : Form {
   Controls.AddRange(new Control[]{stage,progress,detail,done});
   FormClosing+=(s,e)=>{if(!Finished)e.Cancel=true;};
  }
- internal static bool Run(string title,Action<Action<string>> work,string success,string log){
+ internal static bool Run(string title,Action<Action<string>> work,string success,string log,bool closeOnSuccess=false){
   using(var window=new ProgressWindow(title)){
-   window.Shown+=async(s,e)=>await window.Execute(work,success,log);
+   window.Shown+=async(s,e)=>{await window.Execute(work,success,log);if(closeOnSuccess&&window.Failure==null)window.Close();};
    window.ShowDialog();return window.Failure==null;
   }
  }

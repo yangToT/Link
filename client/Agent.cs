@@ -42,7 +42,7 @@ internal sealed class Agent : ServiceBase {
  static string ReadBounded(TextReader reader){var b=new StringBuilder();int c;while((c=reader.Read())>=0&&c!='\n'){b.Append((char)c);if(b.Length>16384)throw new IOException();}return b.ToString();}
  static string NetworkError(WebException e){var r=e.Response as HttpWebResponse;if(r!=null&&(int)r.StatusCode==403)return "设备未获授权，请联系管理员";return "连接未完成，请检查服务端地址、加入码与网络";}
  Dictionary<string,object> Command(Dictionary<string,object> request){string action=Common.Text(request,"action");
-  if(action=="component-diagnostics")return Common.Map("text",Components.Diagnostics());
+  if(action=="component-diagnostics")return Common.Map("text",Components.Diagnostics(layer2.Status,Common.Bool(config,"layer2Enabled")));
   if(action=="status")return Common.Map("message",message,"wanted",wanted,"registered",Common.Text(config,"token")!="","autoStart",Common.Bool(config,"autoStart"),"autoConnect",Common.Bool(config,"autoConnect"),"entryAdapterId",Common.Text(config,"entryAdapterId"),"network",Common.Obj(networkReport,"network"),"layer2",layer2.Status,"layer2Enabled",Common.Bool(config,"layer2Enabled"),"components",Components.Inspect(),"componentBusy",Common.Bool(config,"componentBusy"),"componentMessage",Common.Text(config,"componentMessage"),"state",snapshot,"version",Common.Version);
   if(action=="layer2-enable"||action=="component-maintenance"){
    bool enable=action=="layer2-enable"&&Common.Bool(request,"enabled");

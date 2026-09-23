@@ -1,7 +1,17 @@
-param([Parameter(Mandatory=$true)][string]$Request)
+﻿param([Parameter(Mandatory=$true)][string]$Request)
 $ErrorActionPreference='Stop'
 $p=Get-Content -LiteralPath $Request -Raw -Encoding UTF8 | ConvertFrom-Json
-if($p.account -notmatch '^Link-[A-F0-9]{12}$' -or $p.nic -notmatch '^LNK[A-F0-9]{12}$'){throw 'Invalid resource ownership'}
+if($p.account -notmatch '^Link-[A-F0-9]{12}$' -or $p.nic -notmatch '^(LNK[A-F0-9]{12}|VPN|VPN([2-9]|[1-9][0-9]|1[01][0-9]|12[0-7]))$'){throw 'Invalid resource ownership'}
+if($p.action -in @('identify','verify-nic')){
+ $virtual=@(Get-NetAdapter -IncludeHidden | Where-Object {$_.InterfaceDescription -eq ('VPN Client Adapter - '+$p.nic)})
+ if($virtual.Count -gt 1){throw 'Ambiguous virtual adapter ownership'}
+ if($p.action -eq 'identify'){
+  if($virtual.Count -ne 1){throw 'Created adapter identity unavailable; retain recovery record'}
+  @{nicId=$virtual[0].InterfaceGuid.ToString()} | ConvertTo-Json -Compress;exit
+ }
+ if($virtual.Count -eq 1 -and (!$p.nicId -or $virtual[0].InterfaceGuid.ToString().Trim('{}') -ne $p.nicId.Trim('{}'))){throw 'Adapter identity changed; refusing to remove another adapter'}
+ @{nicPresent=($virtual.Count -eq 1)} | ConvertTo-Json -Compress;exit
+}
 $physical=Get-NetAdapter -IncludeHidden | Where-Object {$_.InterfaceGuid.ToString().Trim('{}') -eq $p.adapterId.Trim('{}')}
 $ip=[Net.IPAddress]::Parse($p.publicServer)
 if($ip.AddressFamily -ne 'InterNetwork'){throw 'IPv4 endpoint required'}
@@ -35,6 +45,7 @@ if(-not $link -or -not $overlay -or $overlay.InterfaceIndex -ne $link.ifIndex){t
 if($p.role -eq 'member' -and $p.action -ne 'pin'){
  $virtual=Get-NetAdapter -IncludeHidden | Where-Object {$_.InterfaceDescription -eq ('VPN Client Adapter - '+$p.nic)}
  if(-not $virtual){throw 'Owned virtual adapter unavailable'}
+ if($p.nic -notlike 'LNK*' -and (!$p.nicId -or $virtual.InterfaceGuid.ToString().Trim('{}') -ne $p.nicId.Trim('{}'))){throw 'Virtual adapter ownership changed'}
  if($p.action -eq 'prepare'){
   Set-NetIPInterface -InterfaceIndex $virtual.ifIndex -AddressFamily IPv4 -IgnoreDefaultRoutes Enabled -AutomaticMetric Disabled -InterfaceMetric 5000 -Dhcp Enabled
   Set-DnsClient -InterfaceIndex $virtual.ifIndex -RegisterThisConnectionsAddress $false
@@ -50,7 +61,7 @@ if($p.role -eq 'member' -and $p.action -ne 'pin'){
   if($unexpected.Count -gt 0){throw 'DHCP supplied an unexpected route'}
   $address=Get-NetIPAddress -InterfaceIndex $virtual.ifIndex -AddressFamily IPv4 | Where-Object {$_.AddressState -eq 'Preferred' -and $_.PrefixOrigin -eq 'Dhcp' -and $_.IPAddress -notlike '169.254.*'} | Select-Object -First 1
   if($address){
-   # These routes live only on the randomly named, journalled Link adapter.
+   # These routes live only on the identity-checked, journalled Link adapter.
    # Never import a default route or overwrite another interface's route.
    foreach($network in $p.networks){
     if($network -notmatch '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.).+/(1[6-9]|2[0-9]|30)$'){throw 'Invalid private destination'}

@@ -13,7 +13,9 @@ def zip_package(name,files):
  with zipfile.ZipFile(release/name,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
   for source,target in files:z.write(source,target)
 base=[(p,relative(p)) for p in common]
-zip_package('Link-client-windows-amd64-v'+version+'.zip',base+[(artifacts/'client-windows-amd64'/name,name) for name in ['Link.exe','Uninstall.exe','netbird.exe','wintun.dll']]+[(root/'client/uninstall.ps1','uninstall.ps1')]+[(root/'client'/name,'client/'+name) for name in ['install-layer2.ps1','prepare-layer2.ps1','manage-components.ps1','uninstall.ps1']])
+update_manifest=artifacts/'client-update.json'
+update_manifest.write_text(json.dumps({'format':1,'version':version,'minimumUpdater':'0.2.0-alpha.8'}),encoding='utf8')
+zip_package('Link-client-windows-amd64-v'+version+'.zip',base+[(update_manifest,'client-update.json')]+[(artifacts/'client-windows-amd64'/name,name) for name in ['Link.exe','Uninstall.exe','netbird.exe','wintun.dll']]+[(root/'client/uninstall.ps1','uninstall.ps1')]+[(root/'client'/name,'client/'+name) for name in ['install-layer2.ps1','prepare-layer2.ps1','manage-components.ps1','uninstall.ps1']])
 if args.client_only:
  p=release/('Link-client-windows-amd64-v'+version+'.zip')
  (release/'SHA256SUMS.txt').write_text(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n',encoding='utf8')

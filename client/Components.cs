@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -35,7 +35,7 @@ internal static class Components {
  }
  internal static void EnableCheck(){if(!Common.Bool(Inspect(),"prepared"))throw new InvalidOperationException("请先安装或修复局域网接入组件");ServicesRunning(true);try{Layer2.CheckComponents();}catch{ServicesRunning(false);throw;}}
  internal static void Elevate(string arguments){
-  try{using(var p=Process.Start(new ProcessStartInfo(System.Reflection.Assembly.GetExecutingAssembly().Location,arguments){UseShellExecute=true,Verb="runas",WindowStyle=arguments.StartsWith("--components")||arguments=="--install-core"?ProcessWindowStyle.Normal:ProcessWindowStyle.Hidden})){p.WaitForExit();if(p.ExitCode!=0)throw new InvalidOperationException("操作未完成，详情请查看功能与组件页面");}}
+  try{using(var p=Process.Start(new ProcessStartInfo(System.Reflection.Assembly.GetExecutingAssembly().Location,arguments){UseShellExecute=true,Verb="runas",WindowStyle=arguments.StartsWith("--components")||arguments=="--install-core"||arguments.StartsWith("--prepare-update ")?ProcessWindowStyle.Normal:ProcessWindowStyle.Hidden})){p.WaitForExit();if(p.ExitCode!=0)throw new InvalidOperationException("操作未完成，详情请查看功能与组件页面");}}
   catch(System.ComponentModel.Win32Exception e){if(e.NativeErrorCode==1223)throw new InvalidOperationException("已取消 Windows 权限确认，未开始安装");throw;}
  }
  internal static void StartAgent(){
@@ -73,8 +73,13 @@ internal static class Components {
    }finally{if(acquired)mutex.ReleaseMutex();}
   }
  }
- internal static string Diagnostics(){
+ internal static string Diagnostics(Dictionary<string,object> lan,bool enabled){
   var lines=new List<string>{"Link "+Common.Version,"组件状态："+Common.Json(Inspect())};
+  lines.Add("局域网接入："+(enabled?"已开启":"未开启")+" · "+Common.Text(lan,"state"));
+  string message=Common.Text(lan,"message");
+  message=System.Text.RegularExpressions.Regex.Replace(message,@"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b","[地址]");
+  if(System.Text.RegularExpressions.Regex.IsMatch(message,@"(?i)password|token|secret|credential"))message="[敏感字段已省略]";
+  lines.Add("当前接入结果："+message);lines.Add("以下为历史组件安装日志，不代表当前连接状态：");
   string file=Path.Combine(Common.Home,"component-install.log");
   if(File.Exists(file)){
    // Script logs have known status prefixes. Do not copy arbitrary PowerShell dumps or secrets.

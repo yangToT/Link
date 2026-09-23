@@ -1,9 +1,11 @@
-# Runs the embedded guard with in-memory cmdlet doubles. No system network changes.
+﻿# Runs the embedded guard with in-memory cmdlet doubles. No system network changes.
 $ErrorActionPreference='Stop'
 $testDir=Join-Path ([IO.Path]::GetTempPath()) ('Link-Guard-Test-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $testDir | Out-Null
+$global:LinkGuardTestnic=$null;
 $global:LinkGuardTestroutes=@();$global:LinkGuardTestremoved=@();$global:LinkGuardTestintercept=$false
 function Get-NetAdapter { param([switch]$IncludeHidden)
+ if($global:LinkGuardTestnic){$global:LinkGuardTestnic}
  [pscustomobject]@{InterfaceGuid=[guid]'11111111-1111-1111-1111-111111111111';ifIndex=6;HardwareInterface=$true;Status='Up';PhysicalMediaType='802.3';Name='Ethernet'}
  [pscustomobject]@{InterfaceGuid=[guid]'22222222-2222-2222-2222-222222222222';ifIndex=9;HardwareInterface=$false;Status='Up';Name='Link0'}
 }
@@ -34,13 +36,22 @@ try {
  # An existing /32 owned elsewhere must not be recorded or removed by Link.
  $p.action='pin';$null=Invoke-Guard;$p.action='cleanup';$null=Invoke-Guard
  if($global:LinkGuardTestroutes.Count -ne 1 -or (Test-Path (Join-Path $testDir 'layer2-route-owner.json'))){throw 'Claimed foreign route'}
- $global:LinkGuardTestroutes=@();$p.action='pin';$global:LinkGuardTestintercept=$true;$rejected=$false
+ $global:LinkGuardTestnic=$null;
+$global:LinkGuardTestroutes=@();$p.action='pin';$global:LinkGuardTestintercept=$true;$rejected=$false
  try {$null=Invoke-Guard} catch {$rejected=$true}
  if(-not $rejected -or -not (Test-Path (Join-Path $testDir 'layer2-route-owner.json'))){throw 'Interception or recovery record not detected'}
  $p.action='cleanup';$null=Invoke-Guard;if($global:LinkGuardTestroutes.Count -ne 0){throw 'Failed pin left route behind'}
+ $global:LinkGuardTestnic=[pscustomobject]@{InterfaceGuid=[guid]'33333333-3333-3333-3333-333333333333';InterfaceDescription='VPN Client Adapter - VPN127';ifIndex=11;Name='Ethernet 3'}
+ $p.nic='VPN127';$p.action='identify';$identity=Invoke-Guard | ConvertFrom-Json
+ if($identity.nicId -ne '33333333-3333-3333-3333-333333333333'){throw 'NIC identity not recorded'}
+ $p.nicId=$identity.nicId;$p.action='verify-nic';if(-not (Invoke-Guard | ConvertFrom-Json).nicPresent){throw 'Owned adapter rejected'}
+ $p.nicId='44444444-4444-4444-4444-444444444444';$rejected=$false;try{$null=Invoke-Guard}catch{$rejected=$true};if(-not $rejected){throw 'Foreign replacement adapter accepted'}
+ foreach($name in @('VPN1','VPN0','VPN128','VPN999')){$p.nic=$name;$rejected=$false;try{$null=Invoke-Guard}catch{$rejected=$true};if(-not $rejected){throw 'Unregulated adapter name accepted'}}
+ $p.nic='VPN127';$global:LinkGuardTestnic=$null;if((Invoke-Guard | ConvertFrom-Json).nicPresent){throw 'Missing adapter not idempotent'}
+ Write-Output 'PASS: regulated NIC names, GUID ownership, missing adapter cleanup'
  Write-Output 'PASS: pin before adapter creation, TUN interception, ownership-only cleanup, failed-pin recovery, idempotent cleanup'
 } finally {
- Remove-Variable -Scope Global -Name LinkGuardTestroutes,LinkGuardTestremoved,LinkGuardTestintercept -ErrorAction SilentlyContinue
+ Remove-Variable -Scope Global -Name LinkGuardTestnic,LinkGuardTestroutes,LinkGuardTestremoved,LinkGuardTestintercept -ErrorAction SilentlyContinue
  # Only this test's generated temp directory is removed.
  if([IO.Path]::GetFullPath($testDir).StartsWith([IO.Path]::GetTempPath(),[StringComparison]::OrdinalIgnoreCase)){Remove-Item -LiteralPath $testDir -Recurse -Force}
 }
