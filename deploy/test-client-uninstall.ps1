@@ -67,6 +67,9 @@ try {
  $process.Refresh();if(-not $process.HasExited){throw 'Portable UI process left running'}
  $locked.Dispose();$locked=$null
  # Source executable was already removed; resume from the owned installation journal.
+ $output=@(& $runner)
+ if($output -notcontains 'LINK_COMPLETE|uninstall' -or -not (Test-Path (Join-Path $data 'device.bin')) -or (Get-Content (Join-Path $data 'device.bin') -Raw).Trim() -ne 'synthetic identity'){throw 'Keep-identity uninstall lost registration'}
+ if(Test-Path $program){throw 'Keep-identity uninstall left programs'}
  $output=@(& $runner -RemoveIdentity)
  if($output -notcontains 'LINK_COMPLETE|uninstall'){throw 'No verified completion'}
  if((Test-Path $program) -or (Test-Path $data) -or (Test-Path (Join-Path $source 'Link.exe')) -or (Test-Path (Join-Path $older 'Link.exe'))){throw 'Owned files remain'}

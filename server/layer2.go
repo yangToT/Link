@@ -174,7 +174,7 @@ func (a *App) layer2Plan(w http.ResponseWriter, r *http.Request) {
 	a.store.Lock()
 	defer a.store.Unlock()
 	d, ok := a.deviceAuth(r, false)
-	if !ok || !publicDevice(*d).Connected {
+	if !ok {
 		failure(w, 403, "设备未获授权")
 		return
 	}
@@ -183,8 +183,14 @@ func (a *App) layer2Plan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	entry := a.store.device(a.store.Data.EntryID)
-	if entry == nil || !publicDevice(*entry).Connected || !entry.Network.BridgeEligible || !entry.Layer2.Enabled || !entry.Layer2.Prepared || !privateIP(entry.LANIP) {
+	if entry == nil || entry.State != "active" || !entry.Network.BridgeEligible || !entry.Layer2.Enabled || !entry.Layer2.Prepared || !privateIP(entry.LANIP) {
 		failure(w, 409, "有线入口不可用")
+		return
+	}
+	// Adapter changes can briefly reconnect the overlay. This is not a credential
+	// revocation. Do not renew the lease or issue credentials until both peers return.
+	if !publicDevice(*d).Connected || !publicDevice(*entry).Connected {
+		failure(w, 425, "专用网络正在恢复")
 		return
 	}
 	if e := a.cfg.Layer2.validate(); e != nil {
@@ -273,7 +279,7 @@ func cleanNetworkReport(n NetworkReport) NetworkReport {
 }
 func cleanLayer2Status(s Layer2Status) Layer2Status {
 	switch s.State {
-	case "off", "preparing", "waiting-address", "attached", "entry-ready", "blocked", "cleanup-failed":
+	case "off", "preparing", "waiting-address", "waiting-network", "attached", "entry-ready", "blocked", "cleanup-failed":
 	default:
 		s.State = "blocked"
 	}

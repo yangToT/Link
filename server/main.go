@@ -29,7 +29,7 @@ import (
 //go:embed web/index.html web/app.js web/style.css
 var assets embed.FS
 
-var version = "0.2.0-alpha.1"
+var version = "0.2.0-alpha.10"
 
 type Session struct {
 	Device  string

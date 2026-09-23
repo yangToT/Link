@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -10,6 +10,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Link {
+internal sealed class TransportPending : InvalidOperationException { internal TransportPending(string message):base(message){} }
 // An optional, explicitly prepared SoftEther installation supplies the signed adapter driver.
 // Only journalled Link accounts, bridges and virtual adapters are ever modified.
 internal sealed class Layer2 {
@@ -17,7 +18,13 @@ internal sealed class Layer2 {
  readonly Func<Dictionary<string,object>> loadConfig;
  readonly Func<Dictionary<string,object>,bool,string,bool,string> command;
  readonly Func<Dictionary<string,object>,string> shell;
- Dictionary<string,object> owned;string signature="";
+ Dictionary<string,object> owned;string signature="";long transportWaiting=-1;
+ internal bool WaitForTransport(string message,long now){
+  if(transportWaiting<0)transportWaiting=now;
+  if(now-transportWaiting>30L*Stopwatch.Frequency)return false;
+  Status=Common.Map("state","waiting-network","message",message+"；正在等待专用网络恢复（最多 30 秒）","ip","");return true;
+ }
+ internal void RecordFailure(string message){try{File.WriteAllText(Path.Combine(Path.GetDirectoryName(journal),"layer2-last-error.json"),Common.Json(Common.Map("time",DateTime.UtcNow.ToString("o"),"message",message)));}catch(IOException){}catch(UnauthorizedAccessException){}}
  internal Dictionary<string,object> Status=Common.Map("state","off","message","未启用局域网接入","ip","");
  internal Layer2():this(Common.Home,LocalConfig,ExecuteCli,Shell){}
  internal Layer2(string directory,Func<Dictionary<string,object>> config,Func<Dictionary<string,object>,bool,string,bool,string> cli,Func<Dictionary<string,object>,string> guard){journal=Path.Combine(directory,"layer2-journal.json");loadConfig=config;command=cli;shell=guard;if(File.Exists(journal))owned=Common.Parse(File.ReadAllText(journal));}
@@ -72,7 +79,7 @@ internal sealed class Layer2 {
   string script=Path.Combine(Common.Home,"layer2-network.ps1");
   using(var input=System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("Link.Layer2Network"))using(var target=File.Create(script))input.CopyTo(target);
   File.WriteAllText(request,Common.Json(payload));
-  try{return Common.Run(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell\\v1.0\\powershell.exe"),"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "+Common.Quote(script)+" -Request "+Common.Quote(request),12000);}finally{File.Delete(request);}
+  try{return Common.Run(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell\\v1.0\\powershell.exe"),"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "+Common.Quote(script)+" -Request "+Common.Quote(request),12000,1);}finally{File.Delete(request);}
  }
  internal static void ValidatePlan(Dictionary<string,object> plan,Dictionary<string,object> local){
   Atom(Common.Text(plan,"hub"));Atom(Common.Text(plan,"username"));Atom(Common.Text(plan,"password"));
@@ -101,12 +108,15 @@ internal sealed class Layer2 {
    ValidatePlan(plan,local);var network=Common.Obj(local,"network");string role=Common.Text(plan,"role");
    string next=Common.Hash(Encoding.UTF8.GetBytes(Common.Json(plan)+Common.Text(network,"adapterId")+Common.Text(network,"gateway")));
    if(signature!=next){
-    Stop();if(owned!=null)throw new InvalidOperationException("上次网络清理未完成，请先恢复");
     var cfg=loadConfig();bool entry=role=="entry";
+    if(owned==null||Common.Text(owned,"planSignature")!=next){
+    Stop();if(owned!=null)throw new InvalidOperationException("上次网络清理未完成，请先恢复");
     Cli(cfg,entry,entry?"CascadeList":"AccountList");
     string id=Guid.NewGuid().ToString("N").Substring(0,12).ToUpperInvariant();
     owned=Common.Map("account","Link-"+id,"nic",entry?"LNK"+id:AvailableNic(Cli(cfg,false,"NicList"),NetworkInterface.GetAllNetworkInterfaces().Select(a=>a.Description)),"role",role,"adapterId",Common.Text(network,"adapterId"),"adapterName",Common.Text(network,"adapterName"),"publicServer",new Uri(publicServer).Host,"gateway",Common.Text(network,"gateway"),"overlayEndpoint",new Uri("https://"+Common.Text(plan,"endpoint")).Host,"remoteGateway",Common.Text(plan,"gateway"),"networks",Strings(plan,"networks").ToArray(),"nicCreated",false,"accountCreated",false,"bridgeCreated",false);
-    Save();Guard("pin");
+    owned["planSignature"]=next;Save();
+    }
+    Guard("pin");
     string name=Common.Text(owned,"account"),nic=Common.Text(owned,"nic"),cert=Path.Combine(Common.Home,"layer2-server.pem");File.WriteAllText(cert,Common.Text(plan,"certificate"));
     if(entry){
      var physical=NetworkDiscovery.Read().Single(a=>a.ID==Common.Text(owned,"adapterId")&&a.Physical&&a.Up&&a.Kind=="ethernet");
@@ -119,23 +129,23 @@ internal sealed class Layer2 {
      owned["bridgeCreated"]=true;Save();Cli(cfg,true,"BridgeCreate BRIDGE /DEVICE:"+Common.Quote(Common.Text(owned,"bridgeDevice"))+" /TAP:no");
      Cli(cfg,true,"CascadeOnline "+name);
     }else{
-     CreateNic(cfg);Guard("prepare");
+     if(!Common.Bool(owned,"nicCreated"))CreateNic(cfg);Guard("prepare");
      owned["accountCreated"]=true;Save();ConnectMember(cfg,plan,name,nic,cert);
     }
     signature=next;
    }
-   Guard("check");
+   Guard("check");transportWaiting=-1;
    if(role=="entry")Status=Common.Map("state","entry-ready","message","有线桥接已配置，等待远端验证","ip",Common.Text(local,"lanIp"));
    else{
     string nic=Common.Text(owned,"nic");var adapter=NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(a=>a.Description.EndsWith(" - "+nic,StringComparison.OrdinalIgnoreCase));
     var address=adapter==null?null:adapter.GetIPProperties().UnicastAddresses.FirstOrDefault(a=>a.Address.AddressFamily==System.Net.Sockets.AddressFamily.InterNetwork&&Agent.Private(a.Address)&&Strings(plan,"networks").Any(n=>NetworkDiscovery.Contains(n,a.Address+"/32")));
     Status=Common.Map("state",address==null?"waiting-address":"attached","message",address==null?"等待入口网络分配地址":"已获得局域网地址；双向服务可用性需单独验证","ip",address==null?"":address.Address.ToString());
    }
-  }catch(Exception e){if(owned!=null){owned["lastFailure"]=e is InvalidOperationException?e.Message:"二层组件操作失败";Save();}Stop();if(owned==null)Status=Common.Map("state","blocked","message",e is InvalidOperationException?e.Message:"二层接入未完成，请检查组件与网络配置","ip","");}
+  }catch(Exception e){if(e is TransportPending&&WaitForTransport(e.Message,Stopwatch.GetTimestamp()))return;RecordFailure(e.Message);if(owned!=null){owned["lastFailure"]=e is InvalidOperationException?e.Message:"二层组件操作失败";Save();}Stop();if(owned==null)Status=Common.Map("state","blocked","message",e is InvalidOperationException?e.Message:"二层接入未完成，请检查组件与网络配置","ip","");}
  }
- void Guard(string action){var payload=new Dictionary<string,object>(owned);payload["action"]=action;string output=shell(payload);var result=Common.Parse(output.Trim());if(result.ContainsKey("nicId")){owned["nicId"]=Common.Text(result,"nicId");Save();}if(result.ContainsKey("nicPresent"))owned["nicPresent"]=Common.Bool(result,"nicPresent");if(result.ContainsKey("routeOwned")){owned["routeOwned"]=Common.Bool(result,"routeOwned");Save();}}
+ void Guard(string action){var payload=new Dictionary<string,object>(owned);payload["action"]=action;string output=shell(payload);var result=Common.Parse(output.Trim());if(result.ContainsKey("waiting"))throw new TransportPending("专用网络路由正在恢复");if(result.ContainsKey("error"))throw new InvalidOperationException("网络检查 "+action+"："+Common.Text(result,"error"));if(result.ContainsKey("nicId")){owned["nicId"]=Common.Text(result,"nicId");Save();}if(result.ContainsKey("nicPresent"))owned["nicPresent"]=Common.Bool(result,"nicPresent");if(result.ContainsKey("routeOwned")){owned["routeOwned"]=Common.Bool(result,"routeOwned");Save();}}
  internal void Stop(){
-  signature="";if(owned==null){Status=Common.Map("state","off","message","局域网接入已断开","ip","");return;}
+  signature="";transportWaiting=-1;if(owned==null){Status=Common.Map("state","off","message","局域网接入已断开","ip","");return;}
   var failures=new List<string>();if(Common.Bool(owned,"nicPending"))failures.Add("虚拟网卡创建结果不明，请保留恢复记录");var cfg=new Dictionary<string,object>();if(new[]{"accountCreated","bridgeCreated","nicCreated"}.Any(flag=>Common.Bool(owned,flag)))try{cfg=loadConfig();}catch{failures.Add("本机组件配置");}
   bool entry=Common.Text(owned,"role")=="entry";string account=Atom(Common.Text(owned,"account"));
   foreach(string flag in new[]{"accountCreated","bridgeCreated","nicCreated"}){

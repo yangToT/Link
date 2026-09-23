@@ -124,10 +124,19 @@ func TestLayer2AuthorizationAndRevocation(t *testing.T) {
 	}
 	a.store.Data.Devices[1].State = "active"
 	a.store.Data.Devices[1].LastSeen = time.Now().Add(-time.Minute)
-	if r := request(a.public(), "POST", "/agent/layer2", nil, token); r.Code != 403 {
+	if r := request(a.public(), "POST", "/agent/layer2", nil, token); r.Code != 425 || strings.Contains(r.Body.String(), `"password"`) {
 		t.Fatal("stale member authorized")
 	}
 	a.store.Data.Devices[1].LastSeen = time.Now()
+	for _, index := range []int{0, 1} {
+		a.store.Data.Devices[index].Connected = false
+		before := len(calls)
+		response := request(a.public(), "POST", "/agent/layer2", nil, token)
+		if response.Code != 425 || strings.Contains(response.Body.String(), `"password"`) || len(calls) != before {
+			t.Fatal("reconnecting device renewed authorization", index, response.Code)
+		}
+		a.store.Data.Devices[index].Connected = true
+	}
 	a.store.Data.Devices[0].Network.BridgeEligible = false
 	if r := request(a.public(), "POST", "/agent/layer2", nil, token); r.Code != 409 {
 		t.Fatal("wireless entry authorized")

@@ -29,6 +29,8 @@ jobs:
             powershell -NoProfile -File (Join-Path deploy $test)
             if ($LASTEXITCODE -ne 0) { throw "Failed: $test" }
           }
+          powershell -NoProfile -File client/test-layer2-network.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Layer2 network guard test failed' }
           ./client/build.ps1
           foreach ($name in @('Link.exe','netbird.exe','wintun.dll','Uninstall.exe','uninstall.ps1','LICENSE','THIRD-PARTY-NOTICES.md')) {
             if (-not (Test-Path "artifacts/client-windows-amd64/$name")) { throw "Missing client file: $name" }

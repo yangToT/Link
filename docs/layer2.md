@@ -66,7 +66,7 @@ $bridgeSecret = Read-Host '本机 Bridge 管理密码' -AsSecureString
 
 - 从硬件清单和网卡 GUID 识别物理网卡，排除 TUN/WireGuard/SoftEther/蓝牙等网卡。有多块有线网卡时要求显式选择；已选择网卡掉线时不会自动桥接另一张网卡。
 - 入口目前只接受有线以太网。Wi-Fi 可供成员普通联网，但不能作为二层入口；由网线切到 Wi-Fi 会中止二层接入。
-- 只在 Link 创建的成员虚拟网卡上禁用默认路由、DNS 接管、IPv6 和 DNS 注册。私有目标路由绑定该虚拟网卡；不重写物理网卡 DNS、默认网关或代理配置。
+- 只在 Link 创建且校验归属的成员虚拟网卡上移除默认路由、沿用本地 DNS，禁用 IPv6 和 DNS 注册。DHCP 地址保留；Windows 可能将 DHCP 默认路由标为 NetMgmt，也按网卡归属清理。私有目标路由绑定该虚拟网卡；不重写物理网卡 DNS、默认网关或代理配置。
 - 必要时创建到 Link 公网控制端点的物理出口 `/32` 路由，并记录归属；已有同目的路由不接管。检查云端专用地址经 Link0 走、入口网关经成员虚拟网卡走。
 - 重叠网段、路由被 TUN 抢占、异常 DHCP 路由、无法隔离 DNS 等情况会停止接入并显示原因。路由检查不能证明 v2rayN 的 WFP/严格路由规则一定放行；双端 TUN 共存仍需实际验证。
 - 停用、踢下线、角色变更撤销对应 SoftEther 用户访问和现有会话。授权账号续期不周期性强断正常连接。90 秒账号到期限制后续认证，**不会强制终止已有会话**；失联设备由服务端定时撤销。管理接口不可用时无法保证立即撤销已有会话，此情况必须按故障处理。
@@ -95,3 +95,5 @@ node .\server\web\check.cjs
 上线前逐项验收：有线入口加成员 DHCP；无 Link 的局域网电脑访问成员 TCP/UDP 服务；成员访问不同内网子网；双方 TUN 开启及重启；正常互联网和代理出口；mstsc；应用注册和真实调用；入口切网、异常退出、断电恢复；踢下线/停用；断开前后路由、DNS、网关及代理规则对比。该清单目前未完成真实跨机验证。
 
 上游依据：[本地桥接](https://www.softether.org/4-docs/1-manual/3/3.6)、[JSON-RPC 接口](https://github.com/SoftEtherVPN/SoftEtherVPN/blob/master/developer_tools/vpnserver-jsonrpc-clients/README.md)、[Windows TUN 严格路由](https://sing-box.sagernet.org/configuration/inbound/tun/)。
+
+alpha.10 对专用路由暂时重连提供最长 30 秒恢复等待，期间保留已有网卡，超时清理。服务端返回独立的等待状态且不续发凭据，身份撤销仍立即进入清理。最近失败原因随复制诊断输出。

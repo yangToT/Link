@@ -12,6 +12,9 @@ internal sealed partial class MainWindow {
   var app=new Application();var window=new MainWindow(true);
   window.Loaded+=async(sender,args)=>{
    try{
+    window.snapshot=Common.Map("registered",true,"wanted",true);window.backendReady=true;window.BackendUnavailable();
+    if(!Common.Bool(window.snapshot,"registered")||window.backendReady||Convert.ToString(window.connection.Content)!="启动 / 重试")throw new Exception("Backend timeout erased the saved registration view");
+    window.snapshot=Common.Map();
     var button=new FeedbackTestButton{Content="保存设置"};window.StyleButton(button);window.body.Children.Add(button);button.ApplyTemplate();
     Color normal=((SolidColorBrush)button.Background).Color;button.Press(true);
     if(((SolidColorBrush)button.Background).Color==normal)throw new Exception("Pressed style is overridden by a local value");

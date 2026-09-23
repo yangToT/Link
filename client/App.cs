@@ -98,7 +98,7 @@ internal static class Program {
 internal sealed partial class MainWindow : Window {
  readonly bool preview;readonly StackPanel body=new StackPanel();readonly TextBlock status=new TextBlock(),entry=new TextBlock(),feedback=new TextBlock();readonly Border entryBox=new Border();
  readonly Button connection=new Button(),management=new Button();readonly TextBox server=new TextBox(),code=new TextBox();readonly CheckBox autoStart=new CheckBox(),autoConnect=new CheckBox();
- Dictionary<string,object> snapshot=Common.Map();bool busy,openOnConnect,refreshing,actionPending;string activePage="devices";DispatcherTimer timer;
+ Dictionary<string,object> snapshot=Common.Map();bool busy,openOnConnect,refreshing,actionPending,backendReady;string activePage="devices";DispatcherTimer timer;
  readonly ProgressBar actionProgress=new ProgressBar{Height=3,IsIndeterminate=true,Visibility=Visibility.Collapsed,Margin=new Thickness(0,3,0,5)};
  readonly StackPanel navigation=new StackPanel();readonly Dictionary<string,Button> pageButtons=new Dictionary<string,Button>();
  System.Windows.Forms.NotifyIcon tray;System.Drawing.Icon trayIcon;System.Windows.Forms.ToolStripMenuItem trayManagement;bool exiting,notified;WindowState restoredState=WindowState.Normal;
@@ -213,6 +213,7 @@ internal sealed partial class MainWindow : Window {
    body.Children.Add(AsyncButton("保存设置",async()=>await Execute(Common.Map("action","settings","autoStart",autoStart.IsChecked==true,"autoConnect",autoConnect.IsChecked==true,"entryAdapterId",Convert.ToString(((ComboBoxItem)adapterChoice.SelectedItem).Tag)))));
    RenderUpdateSettings();body.Children.Add(new TextBlock{Text="最小化会收起到托盘；关闭时可选择是否停止后台。\n仅退出界面会保持连接；完全退出会先清理网络。\n主动断开或被踢下线后，需要手动连接。",Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,22,0,0)});return;
   }
+  if(!preview&&!snapshot.ContainsKey("registered")){body.Children.Add(new TextBlock{Text="先启动后台，读取本机已保存的设备身份。",TextWrapping=TextWrapping.Wrap});body.Children.Add(AsyncButton("安装 / 启动后台",Connect));return;}
   if(!registered){
    body.Children.Add(new TextBlock{Text="加入一个网络",FontSize=17,Margin=new Thickness(0,0,0,4)});body.Children.Add(new TextBlock{Text="输入自托管实例的地址与一次性加入码。",Foreground=muted});body.Children.Add(Label("服务端地址"));
    server.Padding=new Thickness(10);if(server.Text=="")server.Text="https://";body.Children.Add(server);body.Children.Add(Label("一次性加入码"));code.Padding=new Thickness(10);code.TextWrapping=TextWrapping.Wrap;code.MinHeight=62;body.Children.Add(code);
@@ -264,16 +265,22 @@ internal sealed partial class MainWindow : Window {
  }
  async Task ManageCore(){if(busy||preview)return;busy=true;Feedback("正在安装基础组件，Windows 可能请求管理员权限…");try{await Task.Run(()=>Components.Elevate("--install-core"));Feedback("基础组件已更新");}catch(Exception e){Feedback(e.Message,true);}finally{busy=false;}await Refresh();}
  async Task ManageComponent(string action){if(busy||preview)return;busy=true;Feedback(action=="remove"?"正在恢复网络并卸载组件…":"正在准备组件，首次下载可能需要几分钟…");try{await Task.Run(()=>Components.Elevate("--components "+action));Feedback(action=="remove"?"组件已卸载":"组件已安装，局域网接入保持关闭");}catch(Exception e){Feedback(e.Message,true);}finally{busy=false;}await Refresh();}
- async Task Refresh(){if(busy||actionPending||refreshing||preview)return;refreshing=true;try{var next=await Task.Run(()=>Common.Pipe(Common.Map("action","status")));snapshot=next;if(!actionPending&&activePage!="settings")Render();}catch{snapshot=Common.Map();status.Text="后台服务未安装或未启动";connection.Content="启动 / 连接";connection.IsEnabled=!actionPending;management.IsEnabled=false;}finally{refreshing=false;}if(openOnConnect&&management.IsEnabled){openOnConnect=false;await OpenManagement();}}
+ void BackendUnavailable(){backendReady=false;status.Text="暂时无法读取后台状态，正在重试";connection.Content="启动 / 重试";connection.IsEnabled=!actionPending;management.IsEnabled=false;}
+ async Task Refresh(){if(busy||actionPending||refreshing||preview)return;refreshing=true;try{var next=await Task.Run(()=>Common.Pipe(Common.Map("action","status")));snapshot=next;backendReady=true;if(!actionPending&&activePage!="settings")Render();}catch{BackendUnavailable();}finally{refreshing=false;}if(openOnConnect&&management.IsEnabled){openOnConnect=false;await OpenManagement();}}
  async Task Execute(Dictionary<string,object> request){if(busy||preview)return;busy=true;connection.IsEnabled=false;try{await Task.Run(()=>Common.Pipe(request));string action=Common.Text(request,"action");Feedback(action=="settings"?"设置已保存":action=="layer2-enable"?(Common.Bool(request,"enabled")?"局域网接入已开启，请查看连接状态":"局域网接入已停用"):action=="connect"?"连接请求已提交，正在建立连接":action=="disconnect"?"已断开连接":"操作已完成");}catch(Exception e){Feedback(e.Message,true);}finally{busy=false;}await Refresh();}
  async Task Connect(){
   if(busy)return;
+  bool disconnect=backendReady&&Common.Bool(snapshot,"wanted");
   using(var service=ServiceController.GetServices().FirstOrDefault(s=>s.ServiceName=="LinkAgent")){
+   if(service==null){busy=true;try{await Task.Run(()=>Program.Install());snapshot=await Task.Run(()=>Common.Pipe(Common.Map("action","status")));}catch(Exception error){Feedback(error.Message,true);return;}finally{busy=false;}}
    if(service!=null&&service.Status==ServiceControllerStatus.Stopped){busy=true;try{await Task.Run(()=>Components.Elevate("--start-service"));snapshot=await Task.Run(()=>Common.Pipe(Common.Map("action","status")));}catch(Exception error){Feedback(error.Message,true);return;}finally{busy=false;}}
+   if(service!=null){try{snapshot=await Task.Run(()=>Common.Pipe(Common.Map("action","status")));}catch{Feedback("后台暂时无响应，请稍后重试；无需重新输入加入码。",true);return;}}
   }
-  if(!Common.Bool(snapshot,"registered")){await Enroll();return;}await Execute(Common.Map("action",Common.Bool(snapshot,"wanted")?"disconnect":"connect"));}
+  if(!snapshot.ContainsKey("registered")){Feedback("设备身份尚未读取，请重试启动后台。",true);return;}
+  backendReady=true;if(!Common.Bool(snapshot,"registered")){Render();Feedback("本机尚未加入，请输入服务端地址和加入码。");return;}
+  if(!disconnect&&Common.Bool(snapshot,"wanted")){Render();Feedback("已恢复原设备连接状态。");return;}await Execute(Common.Map("action",disconnect?"disconnect":"connect"));}
  async Task Enroll(){if(busy||preview)return;string endpoint=server.Text,credential=code.Text;if(credential.Trim()==""){Feedback("请输入一次性加入码",true);return;}busy=true;connection.IsEnabled=false;Feedback("正在准备后台服务…");
-  try{await Task.Run(()=>Program.Install());await Task.Run(()=>Common.Pipe(Common.Map("action","enroll","server",endpoint,"code",credential)));code.Clear();Feedback("已加入，正在建立连接。");openOnConnect=true;}
+  try{var current=await Task.Run(()=>Common.Pipe(Common.Map("action","status")));if(Common.Bool(current,"registered")){snapshot=current;Feedback("本机已经加入，已恢复原设备状态。");return;}await Task.Run(()=>Common.Pipe(Common.Map("action","enroll","server",endpoint,"code",credential)));code.Clear();Feedback("已加入，正在建立连接。");openOnConnect=true;}
   catch(Exception e){Feedback(e.Message,true);}finally{busy=false;}await Refresh();
  }
  async Task OpenManagement(){if(busy||preview)return;try{var reply=await Task.Run(()=>Common.Pipe(Common.Map("action","browser")));string url=Common.Text(reply,"url");Uri uri;if(!Uri.TryCreate(url,UriKind.Absolute,out uri)||uri.Scheme!="https")throw new InvalidOperationException("管理地址无效");Process.Start(new ProcessStartInfo(url){UseShellExecute=true});Feedback("已在浏览器中打开管理中心");}catch(Exception e){Feedback(e.Message,true);}}

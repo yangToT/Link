@@ -1,5 +1,6 @@
 ﻿param([Parameter(Mandatory=$true)][string]$Request)
 $ErrorActionPreference='Stop'
+try {
 $p=Get-Content -LiteralPath $Request -Raw -Encoding UTF8 | ConvertFrom-Json
 if($p.account -notmatch '^Link-[A-F0-9]{12}$' -or $p.nic -notmatch '^(LNK[A-F0-9]{12}|VPN|VPN([2-9]|[1-9][0-9]|1[01][0-9]|12[0-7]))$'){throw 'Invalid resource ownership'}
 if($p.action -in @('identify','verify-nic')){
@@ -41,22 +42,31 @@ $best=Find-NetRoute -RemoteIPAddress $ip.ToString() | Where-Object {$_.PSObject.
 if(-not $best -or $best.InterfaceIndex -ne $physical.ifIndex){throw 'TUN intercepts the Link transport endpoint'}
 $overlay=Find-NetRoute -RemoteIPAddress $p.overlayEndpoint | Where-Object {$_.PSObject.Properties['DestinationPrefix']} | Select-Object -First 1
 $link=Get-NetAdapter -IncludeHidden | Where-Object {$_.Name -eq 'Link0'}
-if(-not $link -or -not $overlay -or $overlay.InterfaceIndex -ne $link.ifIndex){throw 'Private transport is not using the Link adapter'}
+if(-not $link -or -not $overlay -or $overlay.InterfaceIndex -ne $link.ifIndex){@{waiting='Private network route is recovering'} | ConvertTo-Json -Compress;exit}
 if($p.role -eq 'member' -and $p.action -ne 'pin'){
  $virtual=Get-NetAdapter -IncludeHidden | Where-Object {$_.InterfaceDescription -eq ('VPN Client Adapter - '+$p.nic)}
  if(-not $virtual){throw 'Owned virtual adapter unavailable'}
  if($p.nic -notlike 'LNK*' -and (!$p.nicId -or $virtual.InterfaceGuid.ToString().Trim('{}') -ne $p.nicId.Trim('{}'))){throw 'Virtual adapter ownership changed'}
+ $localDns=@((Get-DnsClientServerAddress -InterfaceIndex $physical.ifIndex -AddressFamily IPv4).ServerAddresses)
+ if($localDns.Count -eq 0){$localDns=@(Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceIndex -ne $virtual.ifIndex} | ForEach-Object {$_.ServerAddresses} | Select-Object -Unique)}
+ if($localDns.Count -eq 0){throw 'No existing local IPv4 DNS configuration available'}
  if($p.action -eq 'prepare'){
   Set-NetIPInterface -InterfaceIndex $virtual.ifIndex -AddressFamily IPv4 -IgnoreDefaultRoutes Enabled -AutomaticMetric Disabled -InterfaceMetric 5000 -Dhcp Enabled
   Set-DnsClient -InterfaceIndex $virtual.ifIndex -RegisterThisConnectionsAddress $false
-  & netsh.exe interface ipv4 set dnsservers "name=$($virtual.ifIndex)" source=static address=none validate=no | Out-Null
-  if($LASTEXITCODE -ne 0){throw 'Cannot isolate virtual adapter DNS'}
+  # Empty DNS lists fall back to DHCP on Windows. Reuse local resolvers explicitly.
+  Set-DnsClientServerAddress -InterfaceIndex $virtual.ifIndex -ServerAddresses $localDns
   Disable-NetAdapterBinding -Name $virtual.Name -ComponentID ms_tcpip6 | Out-Null
  }
  if($p.action -eq 'check'){
-  if(@(Get-NetRoute -InterfaceIndex $virtual.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue).Count -gt 0){throw 'Virtual adapter attempted to replace internet routing'}
+  # IgnoreDefaultRoutes alone does not suppress every IPv4 DHCP route.
+  # The freshly created, GUID-verified Link adapter must never provide an internet exit.
+  # Windows can label a DHCP-supplied gateway NetMgmt; protocol alone is insufficient.
+  Get-NetRoute -InterfaceIndex $virtual.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false
+  Get-NetRoute -InterfaceIndex $virtual.ifIndex | Where-Object {$_.Protocol -eq 'Dhcp' -and $_.NextHop -ne '0.0.0.0' -and $_.DestinationPrefix -notin $p.networks} | Remove-NetRoute -Confirm:$false
+  if(@(Get-NetRoute -InterfaceIndex $virtual.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue).Count -gt 0){throw 'Cannot remove default route from Link adapter'}
   $dns=(Get-DnsClientServerAddress -InterfaceIndex $virtual.ifIndex -AddressFamily IPv4).ServerAddresses
-  if($dns.Count -gt 0){throw 'Virtual adapter attempted to replace DNS'}
+  if(($dns -join ',') -ne ($localDns -join ',')){Set-DnsClientServerAddress -InterfaceIndex $virtual.ifIndex -ServerAddresses $localDns}
+  if(((Get-DnsClientServerAddress -InterfaceIndex $virtual.ifIndex -AddressFamily IPv4).ServerAddresses -join ',') -ne ($localDns -join ',')){throw 'Cannot retain local DNS on Link adapter'}
   $unexpected=@(Get-NetRoute -InterfaceIndex $virtual.ifIndex | Where-Object {$_.Protocol -eq 'Dhcp' -and $_.NextHop -ne '0.0.0.0' -and $_.DestinationPrefix -notin $p.networks})
   if($unexpected.Count -gt 0){throw 'DHCP supplied an unexpected route'}
   $address=Get-NetIPAddress -InterfaceIndex $virtual.ifIndex -AddressFamily IPv4 | Where-Object {$_.AddressState -eq 'Preferred' -and $_.PrefixOrigin -eq 'Dhcp' -and $_.IPAddress -notlike '169.254.*'} | Select-Object -First 1
@@ -74,3 +84,4 @@ if($p.role -eq 'member' -and $p.action -ne 'pin'){
  }
 }
 @{routeOwned=$ownedRoute} | ConvertTo-Json -Compress
+}catch{@{error=$_.Exception.Message} | ConvertTo-Json -Compress;exit 1}

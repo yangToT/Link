@@ -45,6 +45,11 @@ internal static class Layer2Tests {
    layer=new Layer2(directory,()=>Common.Map(),cli,guard);layer.Recover();
    if(File.Exists(file)||Common.Text(layer.Status,"state")!="off"||commands.Count(c=>c.StartsWith("AccountDelete"))!=deletedAccounts)throw new Exception("Restart recovery not idempotent");
    int count=commands.Count;layer.Stop();if(commands.Count!=count)throw new Exception("Clean disconnect changed resources");
+   File.WriteAllText(file,Common.Json(Common.Map("account","Link-ABCDEF012345","nic","LNKABCDEF012345","role","member","accountCreated",true)));
+   layer=new Layer2(directory,()=>Common.Map(),cli,guard);count=commands.Count;
+   if(!layer.WaitForTransport("test",100)||!layer.WaitForTransport("test",100+29L*System.Diagnostics.Stopwatch.Frequency)||layer.WaitForTransport("test",100+31L*System.Diagnostics.Stopwatch.Frequency))throw new Exception("Transport grace is not bounded");
+   if(commands.Count!=count||!File.Exists(file))throw new Exception("Transient route loss destroyed existing identity");
+   layer.Stop();if(File.Exists(file))throw new Exception("Expired transport not cleaned up");
    foreach(int code in new[]{30,32,31}){
     File.WriteAllText(file,Common.Json(Common.Map("account","Link-ABCDEF012345","nic","VPN127","role","member")));
     var called=new List<string>();

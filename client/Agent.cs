@@ -109,7 +109,12 @@ internal sealed class Agent : ServiceBase {
   if(!Common.Bool(config,"layer2Enabled")||Common.Bool(config,"componentBusy")){layer2.Stop();if(!Common.Bool(config,"componentBusy")&&Common.Text(layer2.Status,"state")!="cleanup-failed"&&!Common.Bool(Components.Inspect(),"foreign"))Components.ServicesRunning(false);return;}
   if(Common.Text(snapshot,"networkMode")=="bridged"){
    try{var plan=Common.Api(config,"/agent/layer2",Common.Map());if(Common.Bool(plan,"enabled"))layer2.Apply(plan,networkReport,Common.Text(config,"server"));else layer2.Stop();}
-   catch{layer2.Stop();if(Common.Text(layer2.Status,"state")!="cleanup-failed")layer2.Status=Common.Map("state","blocked","message","局域网接入授权或入口尚未就绪","ip","");}
+   catch(WebException error){var response=error.Response as HttpWebResponse;int code=response==null?0:(int)response.StatusCode;if(response!=null)response.Dispose();
+    string detail=code==403?"设备身份或权限已失效":code==409?"入口未启用或不满足有线接入条件":code==425?"专用网络正在重连":code==503?"服务端局域网授权组件暂不可用":"局域网控制请求失败（"+(code==0?error.Status.ToString():"HTTP "+code)+"）";
+    if((code==0||code==425||code==429||code>=500)&&layer2.WaitForTransport(detail,Stopwatch.GetTimestamp()))return;
+    layer2.RecordFailure(detail);layer2.Stop();if(Common.Text(layer2.Status,"state")!="cleanup-failed")layer2.Status=Common.Map("state","blocked","message",detail,"ip","");
+   }
+   catch(Exception error){string detail=error is InvalidOperationException?error.Message:"局域网配置处理失败（"+error.GetType().Name+"）";layer2.RecordFailure(detail);layer2.Stop();if(Common.Text(layer2.Status,"state")!="cleanup-failed")layer2.Status=Common.Map("state","blocked","message",detail,"ip","");}
   }else{layer2.Stop();if(Common.Text(layer2.Status,"state")!="cleanup-failed")layer2.Status=Common.Map("state","off","message","本机已允许接入，等待管理端启用局域网模式","ip","");}
  }
  void StartNetwork(string setupKey){
