@@ -21,9 +21,19 @@ internal static class Program {
   if(args.Contains("--job-child")){System.Threading.Thread.Sleep(30000);return;}
   if(args.Contains("--service")){ServiceBase.Run(new Agent());return;}
   if(args.Contains("--self-test")){SelfTest.Run();return;}
+  if(args.Contains("--tray-test")){SelfTest.Tray();return;}
   if(args.Length==2&&args[0]=="--check-server"){var config=Common.Parse(File.ReadAllText(args[1]));Common.Request(Common.Text(config,"server")+"/health",Common.Text(config,"pin"),"",null);bool rejected=false;try{Common.Request(Common.Text(config,"server")+"/health",new string('0',64),"",null);}catch(System.Net.WebException){rejected=true;}if(!rejected)throw new Exception("Wrong CA pin accepted");Console.WriteLine("PASS: real server pinned TLS; wrong fingerprint rejected");return;}
   if(args.Contains("--render")){var window=new MainWindow(true);window.RenderImage();return;}
-  var app=new Application();app.Run(new MainWindow(args.Contains("--preview")));
+  if(args.Contains("--preview")){new Application().Run(new MainWindow(true));return;}
+  using(var restore=new System.Threading.EventWaitHandle(false,System.Threading.EventResetMode.AutoReset,"Local\\Link.Client.Restore")){
+   bool first;using(var instance=new System.Threading.Mutex(true,"Local\\Link.Client.Window",out first)){
+    if(!first){restore.Set();return;}
+    var app=new Application();var window=new MainWindow(false);
+    var wait=System.Threading.ThreadPool.RegisterWaitForSingleObject(restore,(s,t)=>{if(!app.Dispatcher.HasShutdownStarted)app.Dispatcher.BeginInvoke((Action)window.RestoreWindow);},null,-1,false);
+    app.SessionEnding+=(s,e)=>window.PrepareExit();
+    try{app.Run(window);}finally{wait.Unregister(null);instance.ReleaseMutex();}
+   }
+  }
  }
  internal static void Install(){
   string directory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"Link");Directory.CreateDirectory(directory);
@@ -41,9 +51,11 @@ internal sealed class MainWindow : Window {
  readonly bool preview;readonly StackPanel body=new StackPanel();readonly TextBlock status=new TextBlock(),entry=new TextBlock(),feedback=new TextBlock();readonly Border entryBox=new Border();
  readonly Button connection=new Button(),management=new Button();readonly TextBox server=new TextBox(),code=new TextBox();readonly CheckBox autoStart=new CheckBox(),autoConnect=new CheckBox();
  Dictionary<string,object> snapshot=Common.Map();bool busy,openOnConnect,refreshing;string activePage="devices";DispatcherTimer timer;
+ System.Windows.Forms.NotifyIcon tray;System.Drawing.Icon trayIcon;System.Windows.Forms.ToolStripMenuItem trayManagement;bool exiting,notified;WindowState restoredState=WindowState.Normal;
  readonly Brush ink=new SolidColorBrush(Color.FromRgb(35,46,51)),muted=new SolidColorBrush(Color.FromRgb(110,120,125)),accent=new SolidColorBrush(Color.FromRgb(34,113,92));
  internal MainWindow(bool isPreview){
   preview=isPreview;Title="Link";Width=820;Height=610;MinWidth=670;MinHeight=520;WindowStartupLocation=WindowStartupLocation.CenterScreen;FontFamily=new FontFamily("Segoe UI, Microsoft YaHei UI");FontSize=13;Foreground=ink;
+  using(var icon=System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("Link.AppIcon")){Icon=System.Windows.Media.Imaging.BitmapFrame.Create(icon,System.Windows.Media.Imaging.BitmapCreateOptions.None,System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);}
   Background=new SolidColorBrush(Color.FromArgb(224,240,245,244));
   var root=new Grid{Background=Background};root.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(192)});root.ColumnDefinitions.Add(new ColumnDefinition());Content=root;
   var rail=new DockPanel{Margin=new Thickness(22,28,18,20)};Grid.SetColumn(rail,0);root.Children.Add(rail);
@@ -57,9 +69,25 @@ internal sealed class MainWindow : Window {
   var scroll=new ScrollViewer{VerticalScrollBarVisibility=ScrollBarVisibility.Auto,Content=body};Grid.SetRow(scroll,1);main.Children.Add(scroll);
   var bottom=new StackPanel();Grid.SetRow(bottom,2);main.Children.Add(bottom);feedback.Foreground=muted;feedback.TextWrapping=TextWrapping.Wrap;feedback.Margin=new Thickness(0,8,0,8);bottom.Children.Add(feedback);
   management.Content="打开管理中心  ↗";StyleButton(management);management.HorizontalAlignment=HorizontalAlignment.Stretch;management.Click+=async(s,e)=>await OpenManagement();bottom.Children.Add(management);
-  SourceInitialized+=(s,e)=>Glass();Loaded+=async(s,e)=>{Render();if(!preview){await Refresh();timer=new DispatcherTimer{Interval=TimeSpan.FromSeconds(3)};timer.Tick+=async(a,b)=>await Refresh();timer.Start();}};
-  Closing+=(s,e)=>{if(timer!=null)timer.Stop();};
+  SourceInitialized+=(s,e)=>Glass();Loaded+=async(s,e)=>{Render();if(!preview){InitializeTray();await Refresh();timer=new DispatcherTimer{Interval=TimeSpan.FromSeconds(3)};timer.Tick+=async(a,b)=>await Refresh();timer.Start();}};
+  StateChanged+=(s,e)=>{if(WindowState==WindowState.Minimized&&tray!=null)HideToTray();else if(WindowState!=WindowState.Minimized)restoredState=WindowState;};
+  Closing+=(s,e)=>{if(!exiting&&tray!=null){e.Cancel=true;HideToTray();}};
+  Closed+=(s,e)=>{if(timer!=null)timer.Stop();if(tray!=null){tray.Visible=false;tray.ContextMenuStrip.Dispose();tray.Dispose();tray=null;}if(trayIcon!=null)trayIcon.Dispose();};
  }
+ internal void InitializeTray(){
+  if(tray!=null)return;
+  using(var stream=System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("Link.AppIcon"))using(var source=new System.Drawing.Icon(stream)){trayIcon=new System.Drawing.Icon(source,System.Windows.Forms.SystemInformation.SmallIconSize);}
+  var menu=new System.Windows.Forms.ContextMenuStrip();
+  menu.Items.Add("打开 Link",null,(s,e)=>RestoreWindow());
+  trayManagement=new System.Windows.Forms.ToolStripMenuItem("打开管理中心",null,async(s,e)=>await OpenManagement()){Enabled=management.IsEnabled};menu.Items.Add(trayManagement);
+  menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());menu.Items.Add("退出界面（保持连接）",null,(s,e)=>{PrepareExit();Close();});
+  tray=new System.Windows.Forms.NotifyIcon{Icon=trayIcon,Text="Link · "+status.Text,ContextMenuStrip=menu,Visible=true};
+  tray.DoubleClick+=(s,e)=>RestoreWindow();
+ }
+ internal void PrepareExit(){exiting=true;}
+ internal void RestoreWindow(){Show();WindowState=restoredState;Activate();Focus();}
+ void HideToTray(){Hide();if(!notified){notified=true;tray.ShowBalloonTip(3000,"Link 已收起","双击托盘图标可恢复窗口，后台连接保持运行。",System.Windows.Forms.ToolTipIcon.Info);}}
+ internal bool TrayVisible {get{return tray!=null&&tray.Visible;}}
  void StyleButton(Button b){b.Padding=new Thickness(13,9,13,9);b.Background=new SolidColorBrush(Color.FromArgb(160,255,255,255));b.BorderBrush=new SolidColorBrush(Color.FromArgb(40,100,125,120));b.BorderThickness=new Thickness(1);b.Cursor=System.Windows.Input.Cursors.Hand;b.Foreground=ink;
   var border=new FrameworkElementFactory(typeof(Border));border.SetValue(Border.CornerRadiusProperty,new CornerRadius(7));border.SetValue(Border.BackgroundProperty,new TemplateBindingExtension(Control.BackgroundProperty));border.SetValue(Border.PaddingProperty,new TemplateBindingExtension(Control.PaddingProperty));
   var content=new FrameworkElementFactory(typeof(ContentPresenter));content.SetValue(FrameworkElement.HorizontalAlignmentProperty,HorizontalAlignment.Center);content.SetValue(FrameworkElement.VerticalAlignmentProperty,VerticalAlignment.Center);border.AppendChild(content);var template=new ControlTemplate(typeof(Button)){VisualTree=border};
@@ -72,13 +100,14 @@ internal sealed class MainWindow : Window {
  void Render(){
   body.Children.Clear();var state=Common.Obj(snapshot,"state")??Common.Map();var self=Common.Obj(state,"device");bool registered=Common.Bool(snapshot,"registered"),online=Common.Bool(self,"connected");
   status.Text=preview?"未连接":Common.Text(snapshot,"message","后台服务未安装");connection.Content=Common.Bool(snapshot,"wanted")?"断开":"连接";connection.IsEnabled=!busy;management.IsEnabled=online&&Common.Text(self,"role")=="admin";
+  if(tray!=null){string tooltip="Link · "+status.Text;tray.Text=tooltip.Length>63?tooltip.Substring(0,63):tooltip;trayManagement.Enabled=management.IsEnabled;}
   string entryID=Common.Text(state,"entryId");if(self!=null&&entryID==Common.Text(self,"id")){body.Children.Add(Card(new TextBlock{Text="●  本机是网络入口",Foreground=accent,FontWeight=FontWeights.SemiBold}));}
   if(activePage=="settings"){
    body.Children.Add(new TextBlock{Text="连接设置",FontSize=17,Margin=new Thickness(0,0,0,15)});
    autoStart.Content="开机启动后台连接";autoStart.IsChecked=Common.Bool(snapshot,"autoStart");autoStart.Margin=new Thickness(0,12,0,12);body.Children.Add(autoStart);
    autoConnect.Content="后台服务启动后自动连接";autoConnect.IsChecked=Common.Bool(snapshot,"autoConnect");autoConnect.Margin=new Thickness(0,12,0,12);body.Children.Add(autoConnect);
    body.Children.Add(Button("保存设置",async()=>await Execute(Common.Map("action","settings","autoStart",autoStart.IsChecked==true,"autoConnect",autoConnect.IsChecked==true))));
-   body.Children.Add(new TextBlock{Text="关闭窗口后，连接由后台服务继续维持。\n主动断开或被踢下线后，需要手动连接。",Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,22,0,0)});return;
+   body.Children.Add(new TextBlock{Text="最小化或关闭窗口会收起到托盘，双击托盘图标可恢复。\n退出界面后，连接仍由后台服务维持。\n主动断开或被踢下线后，需要手动连接。",Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,22,0,0)});return;
   }
   if(!registered){
    body.Children.Add(new TextBlock{Text="加入一个网络",FontSize=17,Margin=new Thickness(0,0,0,4)});body.Children.Add(new TextBlock{Text="输入自托管实例的地址与一次性加入码。",Foreground=muted});body.Children.Add(Label("服务端地址"));
@@ -117,6 +146,20 @@ internal sealed class MainWindow : Window {
  internal void RenderImage(){Render();var root=(FrameworkElement)Content;root.Width=820;root.Height=570;root.Measure(new Size(820,570));root.Arrange(new Rect(0,0,820,570));root.UpdateLayout();var bitmap=new System.Windows.Media.Imaging.RenderTargetBitmap(820,570,96,96,PixelFormats.Pbgra32);bitmap.Render(root);var encoder=new System.Windows.Media.Imaging.PngBitmapEncoder();encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));using(var file=File.Create(Path.Combine(Common.Bin,"client-render.png")))encoder.Save(file);}
 }
 internal static class SelfTest {
+ internal static void Tray(){
+  var app=new Application();var window=new MainWindow(true);
+  window.Loaded+=(s,e)=>window.Dispatcher.BeginInvoke((Action)(()=>{
+   try{
+    window.InitializeTray();if(window.Icon==null||!window.TrayVisible)throw new Exception("Application or tray icon missing");
+    window.WindowState=WindowState.Minimized;if(window.IsVisible||!window.TrayVisible)throw new Exception("Minimize did not retain tray");
+    window.RestoreWindow();if(!window.IsVisible||window.WindowState!=WindowState.Normal)throw new Exception("Tray restore failed");
+    window.WindowState=WindowState.Maximized;window.WindowState=WindowState.Minimized;window.RestoreWindow();if(window.WindowState!=WindowState.Maximized)throw new Exception("Maximized state lost");
+    window.Close();if(window.IsVisible||!window.TrayVisible)throw new Exception("Close did not retain tray");
+    window.RestoreWindow();window.PrepareExit();window.Close();if(window.TrayVisible)throw new Exception("Tray not disposed on exit");
+    File.WriteAllText(Path.Combine(Common.Bin,"tray-test-result.txt"),"PASS: embedded icon, tray lifetime, minimize/restore, maximized restore, close to tray, explicit exit cleanup\n");
+   }catch(Exception error){File.WriteAllText(Path.Combine(Common.Bin,"tray-test-result.txt"),"FAIL: "+error);Environment.ExitCode=1;window.PrepareExit();window.Close();}
+  }));app.Run(window);
+ }
  internal static void Run(){
   Common.ValidateEndpoint("https://203.0.113.1:24443");bool rejected=false;try{Common.ValidateEndpoint("http://203.0.113.1");}catch{rejected=true;}if(!rejected)throw new Exception("plaintext accepted");
   if(Agent.Private(IPAddress.Parse("8.8.8.8"))||!Agent.Private(IPAddress.Parse("172.18.1.1")))throw new Exception("network classification");
