@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -19,7 +19,7 @@ internal static class Program {
  static void Start(string[] args){
   ServicePointManager.SecurityProtocol=SecurityProtocolType.Tls12;
   if(args.Contains("--start-service")){Components.StartAgent();return;}
-  if(args.Contains("--install-core")){if(!Components.Administrator)throw new InvalidOperationException("需要管理员权限");Install();return;}
+  if(args.Contains("--install-core")){if(!Components.Administrator)throw new InvalidOperationException("需要管理员权限");if(!ProgressWindow.Run("安装基础组件",report=>{report("正在更新程序并启动 Link 后台…");Install();},"基础组件已更新",""))Environment.ExitCode=1;return;}
   if(args.Length==2&&args[0]=="--components"){Components.Worker(args[1]);return;}
   if(args.Contains("--disable-layer2")){Common.Pipe(Common.Map("action","layer2-enable","enabled",false));return;}
   if(args.Contains("--job-child")){System.Threading.Thread.Sleep(30000);return;}
@@ -45,6 +45,11 @@ internal static class Program {
  }
  internal static void Install(){
   if(!Components.Administrator){Components.Elevate("--install-core");return;}
+  using(var mutex=new System.Threading.Mutex(false,"Global\\Link.ComponentMaintenance")){
+   bool acquired=false;try{try{acquired=mutex.WaitOne(0);}catch(System.Threading.AbandonedMutexException){acquired=true;}if(!acquired)throw new InvalidOperationException("已有安装或卸载操作正在进行");InstallCore();}finally{if(acquired)mutex.ReleaseMutex();}
+  }
+ }
+ static void InstallCore(){
   string directory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"Link");Directory.CreateDirectory(directory);
   string[] files={"Link.exe","Uninstall.exe","uninstall.ps1","netbird.exe","wintun.dll","THIRD-PARTY-NOTICES.md","LICENSE"};
   foreach(string name in files)if(!File.Exists(Path.Combine(Common.Bin,name)))throw new InvalidOperationException("安装包缺少 "+name);
@@ -183,9 +188,16 @@ internal sealed class MainWindow : Window {
   foreach(var d in Common.Items(state,"devices")){
    var row=new DockPanel();bool isSelf=Common.Text(d,"id")==Common.Text(self,"id");string ip=Common.Text(d,"ip");
    if(!isSelf){var remote=Button("远程桌面",()=>{IPAddress parsed;if(IPAddress.TryParse(ip,out parsed))Process.Start("mstsc.exe","/v:"+ip);});remote.IsEnabled=Common.Bool(d,"connected");DockPanel.SetDock(remote,Dock.Right);row.Children.Add(remote);}
-   var text=new StackPanel();text.Children.Add(new TextBlock{Text=Common.Text(d,"name")+(isSelf?"  ·  本机":""),FontWeight=FontWeights.SemiBold});text.Children.Add(new TextBlock{Text=(Common.Bool(d,"connected")?"● 在线":"○ 离线")+"    "+ip+(Common.Text(d,"id")==entryID?"    网络入口":""),Foreground=muted,Margin=new Thickness(0,8,0,0),TextWrapping=TextWrapping.Wrap});row.Children.Add(text);body.Children.Add(Card(row));
+   var text=new StackPanel();text.Children.Add(new TextBlock{Text=Common.Text(d,"name")+(isSelf?"  ·  本机":""),FontWeight=FontWeights.SemiBold});text.Children.Add(new TextBlock{Text=(Common.Bool(d,"connected")?"● 在线":"○ 离线")+"    "+ip+(Common.Text(d,"id")==entryID?"    网络入口":""),Foreground=muted,Margin=new Thickness(0,8,0,0),TextWrapping=TextWrapping.Wrap});text.Children.Add(new TextBlock{Text=LanBadge(d),Foreground=Common.Bool(Common.Obj(d,"layer2"),"enabled")?accent:muted,Margin=new Thickness(0,7,0,0),TextWrapping=TextWrapping.Wrap});row.Children.Add(text);body.Children.Add(Card(row));
   }
   if(!online)body.Children.Add(Label("设备列表将在网络连接成功后更新。"));
+ }
+ internal static string LanBadge(Dictionary<string,object> d){
+  var lan=Common.Obj(d,"layer2");if(lan==null)return "局域网接入 · 未报告";
+  if(!Common.Bool(d,"connected"))return Common.Bool(lan,"enabled")?"局域网接入 · 已开启（离线，状态待确认）":"局域网接入 · 未开启（离线）";
+  if(!Common.Bool(lan,"enabled"))return "局域网接入 · 未开启";
+  string state=Common.Text(lan,"state");
+  return "局域网接入 · "+(state=="attached"?"已取得地址":state=="entry-ready"?"入口已就绪":state=="blocked"||state=="cleanup-failed"||state=="error"?"已开启，需处理":"已开启，等待接入");
  }
  static string MappingStatus(string s){return s=="ready"?"可用":s=="error"?"转发失败":s=="offline"?"设备离线":"等待同步";}
  void RenderComponents(){

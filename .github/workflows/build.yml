@@ -23,6 +23,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Dependency tests failed' }
           powershell -NoProfile -File deploy/test-component-orchestration.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Component orchestration test failed' }
+          foreach ($test in @('test-client-uninstall.ps1','test-uninstall-windows.ps1','test-layer2-uninstall.ps1','test-progress.ps1')) {
+            powershell -NoProfile -File (Join-Path deploy $test)
+            if ($LASTEXITCODE -ne 0) { throw "Failed: $test" }
+          }
           ./client/build.ps1
           foreach ($name in @('Link.exe','netbird.exe','wintun.dll','Uninstall.exe','uninstall.ps1','LICENSE','THIRD-PARTY-NOTICES.md')) {
             if (-not (Test-Path "artifacts/client-windows-amd64/$name")) { throw "Missing client file: $name" }

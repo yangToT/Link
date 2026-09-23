@@ -1,4 +1,4 @@
-param([switch]$ClientOnly)
+﻿param([switch]$ClientOnly)
 $ErrorActionPreference='Stop'
 $project=Split-Path $PSScriptRoot -Parent
 $framework=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
@@ -9,6 +9,8 @@ foreach($target in $targets){
  $script=if($target -eq 'client'){Join-Path $project 'client\uninstall.ps1'}else{Join-Path $PSScriptRoot 'uninstall-windows-server.ps1'}
  $arguments=@('/nologo','/target:winexe','/platform:x64','/optimize+',('/out:'+(Join-Path $output 'Uninstall.exe')),('/win32manifest:'+(Join-Path $project 'client\admin.manifest')),('/win32icon:'+(Join-Path $project 'client\assets\Link.ico')),('/resource:'+$script+',Link.Uninstall'),('/reference:'+(Join-Path $framework 'System.Windows.Forms.dll')),('/reference:'+(Join-Path $framework 'System.Core.dll')),('/reference:'+(Join-Path $framework 'System.Security.dll')))
  if($target -eq 'server'){$arguments+='/define:SERVER'}
+ $arguments+=('/reference:'+(Join-Path $framework 'System.Drawing.dll'))
+ $arguments+=Join-Path $PSScriptRoot 'ProgressWindow.cs'
  $arguments+=Join-Path $PSScriptRoot 'Uninstaller.cs'
  & (Join-Path $framework 'csc.exe') @arguments
  if($LASTEXITCODE -ne 0){throw 'Uninstaller build failed'}

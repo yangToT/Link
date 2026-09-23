@@ -1,5 +1,6 @@
-param([ValidateSet('install','repair','remove','extract-test')][string]$Action,[string]$Source)
+﻿param([ValidateSet('install','repair','remove','extract-test')][string]$Action,[string]$Source)
 $ErrorActionPreference='Stop'
+[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
 $root=Join-Path $env:ProgramFiles 'Link\softether'
 $data=Join-Path $env:ProgramData 'Link'
 if($Action -ne 'extract-test'){
@@ -37,7 +38,7 @@ public static class LinkPayload {
 try{
  if($Action -eq 'remove'){
   & (Join-Path $PSScriptRoot 'uninstall.ps1') -Layer2Only
-  Log 'SUCCESS: components removed';return
+  Log 'SUCCESS: components removed';Write-Output 'LINK_COMPLETE|components';return
  }
  $cache=if($Action -eq 'extract-test'){$Source}else{Join-Path $data 'component-downloads'}
  if(-not $cache){throw 'Extraction test source is required'}
@@ -48,6 +49,7 @@ try{
  )
  [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12
  foreach($package in $packages){
+  Write-Output ('LINK_STAGE|正在下载并校验组件：'+$package.role)
   $file=Join-Path $cache $package.name
   if(-not (Test-Path -LiteralPath $file) -or (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $package.hash){
    if($Action -eq 'extract-test'){throw 'Test package not present'}
@@ -60,6 +62,7 @@ try{
   if((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $package.hash){throw 'Cached component checksum mismatch'}
   $signature=Get-AuthenticodeSignature -LiteralPath $file
   if($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'SOFTETHER CORPORATION'){throw 'Component publisher signature invalid'}
+  Write-Output ('LINK_STAGE|正在解压并验证组件：'+$package.role)
   $output=Join-Path $cache ($package.role+'-portable');New-Item -ItemType Directory -Path $output -Force | Out-Null
   foreach($name in @('vpncmd',('vpn'+$package.role))){
    $target=Join-Path $output ($name+'.exe')
@@ -72,7 +75,9 @@ try{
  }
  if($Action -eq 'extract-test'){Log 'PASS: pinned installer hashes, publisher signatures, bounded resource extraction and signed payloads';return}
  if($Action -eq 'repair' -and (Test-Path -LiteralPath $root)){& (Join-Path $PSScriptRoot 'uninstall.ps1') -Layer2Only -KeepComponentCache}
+ Write-Output 'LINK_STAGE|正在安装服务并准备网络组件'
  & (Join-Path $PSScriptRoot 'install-layer2.ps1') -ComponentSource $cache -Report $report
  foreach($name in @('SEVPNCLIENT','SEVPNBRIDGE')){Set-Service $name -StartupType Manual;Stop-Service $name}
  Log 'SUCCESS: installed; feature remains disabled'
+ Write-Output 'LINK_COMPLETE|components'
 }catch{Log ('FAILED: '+$_.Exception.Message);exit 1}

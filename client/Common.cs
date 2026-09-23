@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -15,7 +15,7 @@ using System.Web.Script.Serialization;
 
 namespace Link {
 internal static class Common {
- internal const string Version = "0.2.0-alpha.5";
+ internal const string Version = "0.2.0-alpha.6";
  internal static readonly string Home = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Link");
  internal static string Bin { get { return AppDomain.CurrentDomain.BaseDirectory; } }
  internal static Dictionary<string, object> Map(params object[] pairs) { var d=new Dictionary<string,object>();for(int i=0;i<pairs.Length;i+=2)d[(string)pairs[i]]=pairs[i+1];return d; }

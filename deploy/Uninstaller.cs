@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
@@ -15,7 +15,7 @@ internal static class Uninstaller {
    bool worker=args.Length==4&&args[0]=="--worker";
    if(!worker){
     if(args.Length!=0)throw new ArgumentException("Open without arguments; use uninstall.ps1 -Plan for a read-only preview.");
-    if(MessageBox.Show("卸载 Link 并清除本机身份和配置？\n连接将断开。其他软件和共享原文件不会被删除。","卸载 Link",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return 0;
+    if(MessageBox.Show("卸载 Link 并清除本机身份和配置？\n连接将断开。将移除安装文件及正在使用的解压目录内的 Link 程序文件。\n下载压缩包、其他文件和共享原文件保留。","卸载 Link",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return 0;
     string staging=Path.Combine(Path.GetTempPath(),"Link-Uninstall-"+Guid.NewGuid().ToString("N"));
     var acl=new DirectorySecurity();acl.SetAccessRuleProtection(true,false);
     foreach(var sid in new[]{WellKnownSidType.LocalSystemSid,WellKnownSidType.BuiltinAdministratorsSid})acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(sid,null),FileSystemRights.FullControl,InheritanceFlags.ContainerInherit|InheritanceFlags.ObjectInherit,PropagationFlags.None,AccessControlType.Allow));
@@ -31,13 +31,13 @@ internal static class Uninstaller {
    string options=" -RemoveIdentity";
 #if SERVER
    options+=" -ProgramRoot "+Quote(args[1]);
+#else
+   options+=" -SourceRoot "+Quote(args[1]);
 #endif
    var command=new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell\\v1.0\\powershell.exe"),"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "+Quote(script)+options){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-   using(var process=Process.Start(command)){
-    var error=process.StandardError.ReadToEndAsync();string output=process.StandardOutput.ReadToEnd();process.WaitForExit();File.WriteAllText(log,output+error.Result);
-    if(process.ExitCode!=0){MessageBox.Show("卸载未完成，恢复文件已保留。\n详细记录："+log,"Link",MessageBoxButtons.OK,MessageBoxIcon.Error);return process.ExitCode;}
-   }
-   MessageBox.Show("Link 已卸载。","Link",MessageBoxButtons.OK,MessageBoxIcon.Information);
+   Application.EnableVisualStyles();
+   bool success=Link.ProgressWindow.Run("卸载 Link",report=>Link.ProgressWindow.Script(command,report,log,"LINK_COMPLETE|uninstall"),"Link 已卸载",log);
+   if(!success)return 1;
    File.Delete(script);File.Delete(log);MoveFileEx(Assembly.GetExecutingAssembly().Location,null,4);MoveFileEx(directory,null,4);return 0;
   }catch(Exception error){MessageBox.Show(error.Message,"Link 卸载失败",MessageBoxButtons.OK,MessageBoxIcon.Error);return 1;}
  }

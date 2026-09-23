@@ -1,6 +1,7 @@
-param([switch]$RemoveIdentity,[switch]$Plan,[switch]$Layer2Only,[switch]$KeepComponentCache)
+﻿param([switch]$RemoveIdentity,[switch]$Plan,[switch]$Layer2Only,[switch]$KeepComponentCache,[string]$SourceRoot)
 # Run in an elevated PowerShell. Only Link-owned services, rules and files are affected.
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
 $program = [IO.Path]::GetFullPath((Join-Path $env:ProgramFiles 'Link'))
 $data = [IO.Path]::GetFullPath((Join-Path $env:ProgramData 'Link'))
 # Verify every service before changing any of them; shared installations are excluded.
@@ -21,25 +22,93 @@ function Assert-Tree([string]$path) {
 }
 Assert-Tree $program
 if($RemoveIdentity){Assert-Tree $data}
+$ownership=Join-Path $data 'install-owned.json'
+if(Test-Path -LiteralPath $ownership){$record=Get-Content -LiteralPath $ownership -Raw -Encoding UTF8 | ConvertFrom-Json;if($record.program -ne $program){throw 'Installation ownership record mismatch'}}
 if((Test-Path -LiteralPath $program) -and -not ($ownedServices -contains 'LinkAgent') -and -not (Test-Path -LiteralPath (Join-Path $data 'install-owned.json'))){throw 'Cannot prove installation ownership'}
 if($Layer2Only){$ownedServices=@($ownedServices | Where-Object {$_ -ne 'LinkAgent'})}
-if($Plan){[pscustomobject]@{program=$program;data=$data;services=$ownedServices;removeIdentity=[bool]$RemoveIdentity;layer2Only=[bool]$Layer2Only}|ConvertTo-Json;return}
+function Test-LinkExecutable([string]$path){
+    # Read .NET metadata only; do not load or execute an unknown program.
+    try{
+        if([Reflection.AssemblyName]::GetAssemblyName($path).Name -ne 'Link'){return $false}
+        # Framework reflection-only contexts cache assembly identities. Read each
+        # version in a fresh metadata-only process so older copies are recognized.
+        $encodedPath=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($path))
+        $code="try{`$p=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('$encodedPath'));`$r=[Reflection.Assembly]::ReflectionOnlyLoad([IO.File]::ReadAllBytes(`$p)).GetManifestResourceNames();if(`$r -contains 'Link.AppIcon' -and `$r -contains 'Link.Layer2Network' -and `$r -contains 'Link.Script.uninstall.ps1'){'LINK_METADATA_OK'}}catch{exit 1}"
+        $info=New-Object Diagnostics.ProcessStartInfo
+        $info.FileName=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $info.Arguments='-NoProfile -NonInteractive -EncodedCommand '+[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
+        $info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
+        $probe=[Diagnostics.Process]::Start($info)
+        try{if(-not $probe.WaitForExit(10000)){$probe.Kill();throw 'Metadata probe timed out'};return $probe.ExitCode -eq 0 -and $probe.StandardOutput.ReadToEnd().Trim() -eq 'LINK_METADATA_OK'}finally{$probe.Dispose()}
+    }catch{return $false}
+}
+$portableFiles=@()
+if(-not $Layer2Only){
+    $referenceRoots=@($program)
+    if($SourceRoot){
+        $source=[IO.Path]::GetFullPath($SourceRoot).TrimEnd('\')
+        if($source -ne $program){
+            $sourceExe=Join-Path $source 'Link.exe'
+            if(-not (Test-Path -LiteralPath $sourceExe) -or -not (Test-LinkExecutable $sourceExe)){throw 'Uninstaller must be beside the Link client program'}
+            $referenceRoots+=$source
+        }
+    }
+    $hashes=@{};$files=@('Link.exe','netbird.exe','wintun.dll','Uninstall.exe','uninstall.ps1')
+    foreach($base in $referenceRoots){foreach($name in $files){$file=Join-Path $base $name;if(Test-Path -LiteralPath $file){if((Get-Item -LiteralPath $file -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Package file is a reparse point'};$hashes[(Get-FileHash -LiteralPath $file).Hash]=$true}}}
+    # Older clients can still be running from an extracted package. Match their
+    # actual bytes or Link-specific managed resources, never kill by filename alone.
+    $activeCopies=@(Get-CimInstance Win32_Process | Where-Object {$_.Name -eq 'Link.exe' -and $_.ExecutablePath -and (Test-Path -LiteralPath $_.ExecutablePath) -and ($hashes.ContainsKey((Get-FileHash -LiteralPath $_.ExecutablePath).Hash) -or (Test-LinkExecutable $_.ExecutablePath))})
+    foreach($copy in $activeCopies){$hashes[(Get-FileHash -LiteralPath $copy.ExecutablePath).Hash]=$true}
+    $packageRoots=@($referenceRoots+@($activeCopies | ForEach-Object {Split-Path $_.ExecutablePath -Parent}) | Select-Object -Unique)
+    # Retain the scope across retries: a failed cleanup may already have stopped
+    # a portable process, so the next attempt cannot rediscover it by process ID.
+    if($record -and $record.uninstallPending){foreach($saved in @($record.portableFiles)){
+        if(-not $saved.path){continue}
+        $file=[IO.Path]::GetFullPath([string]$saved.path)
+        if([IO.Path]::GetFileName($file) -notin $files){throw 'Invalid saved portable file'}
+        if(Test-Path -LiteralPath $file){
+            if((Get-FileHash -LiteralPath $file).Hash -ne $saved.hash){throw 'Saved portable file changed; review before retry'}
+            $hashes[$saved.hash]=$true;$packageRoots+=Split-Path $file -Parent
+        }
+    }}
+    foreach($base in $packageRoots | Select-Object -Unique | Where-Object {$_ -ne $program}){
+        # Never recursively remove an extraction folder; it can contain user work.
+        $ancestor=Get-Item -LiteralPath $base -Force
+        while($ancestor){if($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Package path is a reparse point'};$ancestor=$ancestor.Parent}
+        foreach($name in $files){$file=Join-Path $base $name;if(Test-Path -LiteralPath $file){if((Get-Item -LiteralPath $file -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Package file is a reparse point'};if($hashes.ContainsKey((Get-FileHash -LiteralPath $file).Hash)){$portableFiles+=$file}}}
+    }
+}
+function Stop-OwnedProcess($process){
+    $current=Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue
+    if(-not $current){return}
+    try{
+        if(-not $current.MainModule.FileName.Equals($process.ExecutablePath,[StringComparison]::OrdinalIgnoreCase)){throw 'Process identity changed; retry uninstall'}
+        $current.Kill();if(-not $current.WaitForExit(15000)){throw 'Owned process did not exit'}
+    }finally{$current.Dispose()}
+}
+if($Plan){[pscustomobject]@{program=$program;data=$data;services=$ownedServices;portableFiles=$portableFiles;removeIdentity=[bool]$RemoveIdentity;layer2Only=[bool]$Layer2Only}|ConvertTo-Json;return}
 $principal=New-Object Security.Principal.WindowsPrincipal ([Security.Principal.WindowsIdentity]::GetCurrent())
 if(-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Run as administrator'}
+$mutex=$null;$acquired=$false
+if(-not $Layer2Only){$mutex=New-Object Threading.Mutex($false,'Global\Link.ComponentMaintenance');try{$acquired=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$acquired=$true};if(-not $acquired){$mutex.Dispose();throw 'Another installation or component operation is running'}}
+try {
+Write-Output 'LINK_STAGE|正在断开连接并停止后台服务'
 if(-not $Layer2Only){
-if(Test-Path -LiteralPath $data){@{program=$program;uninstallPending=$true}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $data 'install-owned.json') -Encoding UTF8}
+if(Test-Path -LiteralPath $data){@{program=$program;uninstallPending=$true;portableFiles=@($portableFiles | ForEach-Object {@{path=$_;hash=(Get-FileHash -LiteralPath $_).Hash}})}|ConvertTo-Json -Depth 4|Set-Content -LiteralPath (Join-Path $data 'install-owned.json') -Encoding UTF8}
 $service = Get-Service -Name LinkAgent -ErrorAction SilentlyContinue
 if ($service) {
     & sc.exe config LinkAgent start= disabled | Out-Null
     if($LASTEXITCODE -ne 0){throw 'Cannot disable LinkAgent restart'}
     if ($service.Status -ne 'Stopped') { Stop-Service -Name LinkAgent }
-    $service.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(150))
+    try{$service.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(150))}finally{$service.Dispose();$service=$null}
 }
-Get-CimInstance Win32_Process | Where-Object {$_.ExecutablePath -and ([IO.Path]::GetFullPath($_.ExecutablePath)).StartsWith($program+'\',[StringComparison]::OrdinalIgnoreCase) -and $_.Name -in @('Link.exe','netbird.exe')} | ForEach-Object {Stop-Process -Id $_.ProcessId -Force}
+foreach($copy in $activeCopies){Stop-OwnedProcess $copy}
+Get-CimInstance Win32_Process | Where-Object {$_.ExecutablePath -and ([IO.Path]::GetFullPath($_.ExecutablePath)).StartsWith($program+'\',[StringComparison]::OrdinalIgnoreCase) -and $_.Name -in @('Link.exe','netbird.exe')} | ForEach-Object {Stop-OwnedProcess $_}
 }else{
     $disable=Start-Process -FilePath (Join-Path $program 'Link.exe') -ArgumentList '--disable-layer2' -WindowStyle Hidden -Wait -PassThru
     if($disable.ExitCode -ne 0){throw 'Stop LAN access before component removal; recovery data retained'}
 }
+Write-Output 'LINK_STAGE|正在恢复 Link 网络设置'
 $installed = Join-Path $env:ProgramFiles 'Link\Link.exe'
 $journal = Join-Path $env:ProgramData 'Link\layer2-journal.json'
 if (Test-Path -LiteralPath $journal) {
@@ -91,8 +160,17 @@ if(Test-Path -LiteralPath $componentJournal){
     }
 }
 }
+Write-Output 'LINK_STAGE|正在移除专属组件与驱动'
 Remove-OwnedLayer2Driver
 foreach($name in $ownedServices){& sc.exe delete $name | Out-Null;if($LASTEXITCODE -notin @(0,1060)){throw ('Cannot remove owned service '+$name)}}
+# A successful sc delete can mean marked-for-deletion. Do not report success
+# while another process still holds the service open.
+foreach($name in $ownedServices){
+    $deadline=[DateTime]::UtcNow.AddSeconds(15)
+    do{$remaining=Get-Service -Name $name -ErrorAction SilentlyContinue;if(-not $remaining){break};$remaining.Dispose();Start-Sleep -Milliseconds 250}while([DateTime]::UtcNow -lt $deadline)
+    if($remaining){throw ('Service still pending deletion; close service management windows or restart Windows and retry: '+$name)}
+}
+Write-Output 'LINK_STAGE|正在清理 Link 规则与程序文件'
 if(-not $Layer2Only){Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'Link-Map-*' -or $_.DisplayName -like 'Link-Service-*' } | Remove-NetFirewallRule}
 foreach($name in @('Link-Layer2-client','Link-Layer2-bridge')) {
     $rule=Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue
@@ -107,6 +185,7 @@ if($Layer2Only){
     if(Test-Path -LiteralPath $componentRoot){Remove-Item -LiteralPath $componentRoot -Recurse -Force}
     foreach($name in @('layer2-local.bin','layer2-install.json','layer2-server.pem','layer2-driver-install-evidence.txt')){Remove-Item -LiteralPath (Join-Path $data $name) -Force -ErrorAction SilentlyContinue}
     if(-not $KeepComponentCache){$cache=[IO.Path]::GetFullPath((Join-Path $data 'component-downloads'));if($cache -ne ([IO.Path]::GetFullPath((Join-Path $env:ProgramData 'Link'))+'\component-downloads')){throw 'Unsafe cache path'};Assert-Tree $cache;if(Test-Path -LiteralPath $cache){Remove-Item -LiteralPath $cache -Recurse -Force}}
+    if(Test-Path -LiteralPath $componentRoot){throw 'Component files remain'}
     Write-Output 'Optional LAN components removed; Link identity and base connection retained.';return
 }
 $data = [IO.Path]::GetFullPath((Join-Path $env:ProgramData 'Link'))
@@ -122,10 +201,19 @@ if ($RemoveIdentity -and (Test-Path -LiteralPath $data)) {
         try { $store.Open('ReadWrite'); $store.Remove($cert) } finally { $store.Close() }
     }
 }
+foreach($file in $portableFiles){if(Test-Path -LiteralPath $file){Remove-Item -LiteralPath $file -Force}}
 if (Test-Path -LiteralPath $program) { Remove-Item -LiteralPath $program -Recurse -Force }
 $uninstallKey='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Link.Client'
 $registration=Get-ItemProperty -LiteralPath $uninstallKey -ErrorAction SilentlyContinue
 if($registration -and $registration.InstallLocation -eq $program){Remove-Item -LiteralPath $uninstallKey}
+if(Get-CimInstance Win32_Process | Where-Object {$_.ExecutablePath -and ($_.ExecutablePath.StartsWith($program+'\',[StringComparison]::OrdinalIgnoreCase) -or $_.ExecutablePath -in $portableFiles)}){throw 'Link processes remain; identity retained'}
 if ($RemoveIdentity -and (Test-Path -LiteralPath $data)) { Remove-Item -LiteralPath $data -Recurse -Force }
 if ($RemoveIdentity) { Remove-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Link' -Name OwnerSID -ErrorAction SilentlyContinue }
+Write-Output 'LINK_STAGE|正在核验卸载结果'
+if(Test-Path -LiteralPath $program){throw 'Installation files remain'}
+if($RemoveIdentity -and (Test-Path -LiteralPath $data)){throw 'Identity files remain'}
+foreach($file in $portableFiles){if(Test-Path -LiteralPath $file){throw 'Portable program files remain'}}
+if(Get-CimInstance Win32_Process | Where-Object {$_.ExecutablePath -and ($_.ExecutablePath.StartsWith($program+'\',[StringComparison]::OrdinalIgnoreCase) -or $_.ExecutablePath -in $portableFiles)}){throw 'Link processes remain'}
 Write-Output 'Link removed. Device identity is retained unless -RemoveIdentity was supplied.'
+Write-Output 'LINK_COMPLETE|uninstall'
+}finally{if($mutex){if($acquired){$mutex.ReleaseMutex()};$mutex.Dispose()}}

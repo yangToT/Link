@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -35,7 +35,7 @@ internal static class Components {
  }
  internal static void EnableCheck(){if(!Common.Bool(Inspect(),"prepared"))throw new InvalidOperationException("请先安装或修复局域网接入组件");ServicesRunning(true);try{Layer2.CheckComponents();}catch{ServicesRunning(false);throw;}}
  internal static void Elevate(string arguments){
-  try{using(var p=Process.Start(new ProcessStartInfo(System.Reflection.Assembly.GetExecutingAssembly().Location,arguments){UseShellExecute=true,Verb="runas",WindowStyle=ProcessWindowStyle.Hidden})){p.WaitForExit();if(p.ExitCode!=0)throw new InvalidOperationException("操作未完成，详情请查看功能与组件页面");}}
+  try{using(var p=Process.Start(new ProcessStartInfo(System.Reflection.Assembly.GetExecutingAssembly().Location,arguments){UseShellExecute=true,Verb="runas",WindowStyle=arguments.StartsWith("--components")||arguments=="--install-core"?ProcessWindowStyle.Normal:ProcessWindowStyle.Hidden})){p.WaitForExit();if(p.ExitCode!=0)throw new InvalidOperationException("操作未完成，详情请查看功能与组件页面");}}
   catch(System.ComponentModel.Win32Exception e){if(e.NativeErrorCode==1223)throw new InvalidOperationException("已取消 Windows 权限确认，未开始安装");throw;}
  }
  internal static void StartAgent(){
@@ -47,6 +47,11 @@ internal static class Components {
   using(var service=new ServiceController("LinkAgent")){if(service.Status==ServiceControllerStatus.Stopped)service.Start();service.WaitForStatus(ServiceControllerStatus.Running,TimeSpan.FromSeconds(120));}
  }
  internal static void Worker(string action){
+  System.Windows.Forms.Application.EnableVisualStyles();
+  string title=action=="remove"?"卸载局域网组件":action=="repair"?"修复局域网组件":"安装局域网组件";
+  if(!ProgressWindow.Run(title,report=>WorkerCore(action,report),action=="remove"?"局域网组件已卸载，Link 基础连接保留":"组件已就绪，局域网接入保持关闭",Path.Combine(Common.Home,"component-operation.log")))Environment.ExitCode=1;
+ }
+ static void WorkerCore(string action,Action<string> report){
   if(!Administrator)throw new InvalidOperationException("安装组件需要 Windows 管理员权限");
   if(!new[]{"install","repair","remove"}.Contains(action))throw new InvalidOperationException("组件操作无效");
   using(var mutex=new Mutex(false,"Global\\Link.ComponentMaintenance")){
@@ -59,8 +64,10 @@ internal static class Components {
      foreach(string script in new[]{"install-layer2.ps1","prepare-layer2.ps1","manage-components.ps1","uninstall.ps1"}){
       using(var source=System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("Link.Script."+script))using(var output=File.Create(Path.Combine(work,script)))source.CopyTo(output);
      }
-     Common.Run(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell\\v1.0\\powershell.exe"),"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "+Common.Quote(Path.Combine(work,"manage-components.ps1"))+" -Action "+action,1200000);
-     if(action!="remove"){stage="验证本机组件认证";EnableCheck();stage="停止待启用组件";ServicesRunning(false);}
+     report("正在准备局域网组件…");
+     var command=new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell\\v1.0\\powershell.exe"),"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "+Common.Quote(Path.Combine(work,"manage-components.ps1"))+" -Action "+action);
+     ProgressWindow.Script(command,report,Path.Combine(Common.Home,"component-operation.log"),"LINK_COMPLETE|components");
+     if(action!="remove"){stage="验证本机组件认证";report(stage);EnableCheck();stage="停止待启用组件";report(stage);ServicesRunning(false);}
      Common.Pipe(Common.Map("action","component-maintenance","busy",false,"message",action=="remove"?"组件已卸载，基础连接保持运行":"组件已就绪，可按需启用局域网接入"));
     }catch(Exception error){try{Common.Pipe(Common.Map("action","component-maintenance","busy",false,"message",stage+"失败："+error.Message+"。诊断日志：C:\\ProgramData\\Link\\component-install.log"));}catch{}throw;}
    }finally{if(acquired)mutex.ReleaseMutex();}

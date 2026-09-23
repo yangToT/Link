@@ -17,6 +17,10 @@ const server=http.createServer(async(req,res)=>{if(req.url==='/api/events'){even
  if(req.method!=='GET')broadcast();res.setHeader('Content-Type','application/json');res.end(JSON.stringify(result));});
 (async()=>{await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const browser=await chromium.launch({channel:'chrome',headless:true});const page=await browser.newPage({viewport:{width:1200,height:800}});const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
  try{await page.goto('http://127.0.0.1:'+server.address().port);await page.locator('td').filter({hasText:'workstation'}).first().waitFor();
+ for(const [lan,connected,expected] of [[{enabled:true,state:'attached'},true,'已取得地址'],[{enabled:true,state:'entry-ready'},true,'入口已就绪'],[{enabled:true,state:'blocked'},true,'需处理'],[{enabled:true,state:'attached'},false,'离线待确认'],[{enabled:false,prepared:true},true,'未开启']]){
+  devices[0].layer2=lan;devices[0].connected=connected;broadcast();await page.waitForFunction(expected=>document.querySelector('.lan-badge').textContent.includes(expected),expected);
+ }
+ devices[0].layer2={enabled:false};devices[0].connected=true;broadcast();
  await page.getByRole('button',{name:'＋ 添加设备'}).click();await page.getByRole('button',{name:'生成加入码'}).click();assert.equal(await page.locator('textarea').inputValue(),'SYNTHETIC-TEST-CODE');await page.getByRole('button',{name:'关闭',exact:true}).click();
  await page.getByRole('button',{name:'服务映射',exact:true}).click();await page.getByRole('button',{name:'＋ 添加映射'}).click();await page.locator('#mapping-name').fill('web-preview');await page.locator('#mapping-device').selectOption('two');await page.getByRole('button',{name:'添加映射',exact:true}).click();await page.locator('td').filter({hasText:'web-preview'}).first().waitFor();assert.equal(state.mappings[0].port,9000);
  await page.getByRole('button',{name:'详情',exact:true}).click();assert((await page.locator('textarea').inputValue()).includes('22000'));await page.getByRole('button',{name:'关闭',exact:true}).click();

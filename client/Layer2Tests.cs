@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -6,6 +6,12 @@ using System.Linq;
 namespace Link {
 internal static class Layer2Tests {
  internal static void Run(){
+  foreach(var sample in new[]{new[]{"attached","已取得地址"},new[]{"entry-ready","入口已就绪"},new[]{"blocked","需处理"},new[]{"waiting-address","等待接入"}}){
+   var badgeDevice=Common.Map("connected",true,"layer2",Common.Map("enabled",true,"state",sample[0]));
+   if(!MainWindow.LanBadge(badgeDevice).Contains(sample[1]))throw new Exception("LAN badge state mismatch");
+   badgeDevice["connected"]=false;if(!MainWindow.LanBadge(badgeDevice).Contains("离线"))throw new Exception("Offline LAN state presented as live");
+  }
+  if(!MainWindow.LanBadge(Common.Map("connected",true,"layer2",Common.Map("prepared",true,"enabled",false))).Contains("未开启"))throw new Exception("Installed components presented as enabled");
   string expected="Test Ethernet (ID=2814777680)";
   if(Layer2.BridgeDevice("Test Ethernet","{11111111-1111-1111-1111-111111111111}","Device Name|"+expected+"\r\n")!=expected)throw new Exception("SoftEther adapter ID mismatch");
   bool refused=false;try{Layer2.BridgeDevice("Test Ethernet","{22222222-2222-2222-2222-222222222222}",expected);}catch(InvalidOperationException){refused=true;}if(!refused)throw new Exception("Wrong physical adapter accepted");

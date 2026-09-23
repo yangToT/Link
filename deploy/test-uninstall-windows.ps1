@@ -1,4 +1,4 @@
-# Test only a generated portable-server directory; service/process commands are doubles.
+﻿# Test only a generated portable-server directory; service/process commands are doubles.
 $ErrorActionPreference='Stop'
 $testDir=Join-Path ([IO.Path]::GetTempPath()) ('Link-Uninstall-Test-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path (Join-Path $testDir 'data') -Force | Out-Null
@@ -6,10 +6,10 @@ foreach($name in @('LinkServer.exe','Uninstall.exe','uninstall.ps1','keep-user-d
 $global:LinkUninstallTestRoot=$testDir;$global:LinkUninstallTestCalls=New-Object 'Collections.Generic.List[string]'
 function Get-CimInstance {param($ClassName)
  if($ClassName -eq 'Win32_Service'){
-  [pscustomobject]@{Name='OwnedTestService';PathName='"'+(Join-Path $global:LinkUninstallTestRoot 'LinkServer.exe')+'" -data data'}
+  if(-not $global:LinkUninstallTestCalls.Contains('sc delete OwnedTestService')){[pscustomobject]@{Name='OwnedTestService';PathName='"'+(Join-Path $global:LinkUninstallTestRoot 'LinkServer.exe')+'" -data data'}}
   [pscustomobject]@{Name='ForeignService';PathName='C:\Unrelated\database.exe'}
  }else{
-  [pscustomobject]@{ProcessId=424242;ExecutablePath=(Join-Path $global:LinkUninstallTestRoot 'LinkServer.exe')}
+  if(-not $global:LinkUninstallTestCalls.Contains('process 424242')){[pscustomobject]@{ProcessId=424242;ExecutablePath=(Join-Path $global:LinkUninstallTestRoot 'LinkServer.exe')}}
   [pscustomobject]@{ProcessId=313131;ExecutablePath='C:\Unrelated\database.exe'}
  }
 }
