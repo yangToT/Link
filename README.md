@@ -39,13 +39,16 @@ Windows 客户端最小化或关闭窗口后收起到右下角托盘；双击托
 
 ## 开发
 
-Windows 安装 Go 1.24+，运行 `./build.ps1`。客户端使用 Windows 的 .NET Framework 编译器，不需要额外 .NET SDK。
+Windows 完整构建需要 Go 1.24+ 和 Python 3.9+；仅构建客户端不需要 Go。客户端使用系统自带的 .NET Framework 4.8 编译器，不需要额外 .NET SDK。首次完整客户端构建自动从 GitHub 和 Wintun 官网下载固定版本并校验 SHA-256；缓存位于 `artifacts/vendor/`，校验通过的缓存可离线复用。
 
 ```powershell
-./build.ps1
+./client/build.ps1  # 完整客户端，输出到 artifacts/client-windows-amd64/
+./build.ps1         # 同时构建服务端（还需要 Go）
 ./client/build.ps1 -Check
 ./artifacts/client-windows-amd64/Link.Check.exe --self-test
 ```
+
+`netbird.exe` 和 `wintun.dll` 是运行依赖，不提交到 Git，由构建脚本自动准备。完整输出同时包含卸载程序、脚本和许可证；移动到其他电脑时请复制整个输出目录。使用 `./client/build.ps1 -CompileOnly` 可离线仅编译 Link.exe，`-Check` 同样不下载组件。Python 未在 PATH 时可传入 `-Python "C:\Python313\python.exe"`。网络受限时可直接使用 Releases 中的完整客户端包；GitHub 自动生成的 Source code 压缩包只含源码。
 
 `server/web/` 是内嵌 HTML/CSS/JavaScript，无独立前端服务。`node server/web/check.cjs` 运行 Playwright 界面检查，需要 Chrome；`PLAYWRIGHT_MODULE` 可指定模块路径。该检查使用合成 API，不等于组网验收。
 

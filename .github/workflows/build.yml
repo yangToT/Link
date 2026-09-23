@@ -19,7 +19,12 @@ jobs:
       - uses: actions/checkout@v4
       - shell: pwsh
         run: |
+          python deploy/test_fetch_clients.py
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency tests failed' }
           ./client/build.ps1
+          foreach ($name in @('Link.exe','netbird.exe','wintun.dll','Uninstall.exe','uninstall.ps1','LICENSE','THIRD-PARTY-NOTICES.md')) {
+            if (-not (Test-Path "artifacts/client-windows-amd64/$name")) { throw "Missing client file: $name" }
+          }
           ./client/build.ps1 -Check
           ./artifacts/client-windows-amd64/Link.Check.exe --self-test
           if ($LASTEXITCODE -ne 0) { throw 'Windows self-test failed' }

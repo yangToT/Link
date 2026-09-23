@@ -1,7 +1,9 @@
+param([switch]$ClientOnly)
 $ErrorActionPreference='Stop'
 $project=Split-Path $PSScriptRoot -Parent
 $framework=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
-foreach($target in @('client','server')){
+$targets=if($ClientOnly){@('client')}else{@('client','server')}
+foreach($target in $targets){
  $output=Join-Path $project ('artifacts\'+$target+'-windows-amd64')
  New-Item -ItemType Directory -Path $output -Force | Out-Null
  $script=if($target -eq 'client'){Join-Path $project 'client\uninstall.ps1'}else{Join-Path $PSScriptRoot 'uninstall-windows-server.ps1'}
@@ -12,6 +14,7 @@ foreach($target in @('client','server')){
  if($LASTEXITCODE -ne 0){throw 'Uninstaller build failed'}
  Copy-Item -LiteralPath $script -Destination (Join-Path $output 'uninstall.ps1') -Force
 }
+if ($ClientOnly) { Write-Output 'Built client Uninstall.exe.'; return }
 $previousOS=$env:GOOS;$previousArch=$env:GOARCH;$previousCGO=$env:CGO_ENABLED
 try{
  $env:GOOS='linux';$env:GOARCH='amd64';$env:CGO_ENABLED='0'

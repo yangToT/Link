@@ -1,4 +1,4 @@
-param([switch]$Check)
+param([switch]$Check, [switch]$CompileOnly, [string]$Python = "")
 $ErrorActionPreference = 'Stop'
 $project = Split-Path $PSScriptRoot -Parent
 $output = Join-Path $project 'artifacts\client-windows-amd64'
@@ -16,3 +16,18 @@ $arguments += Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' | Select-O
 & (Join-Path $framework 'csc.exe') @arguments
 if ($LASTEXITCODE -ne 0) { throw 'Client compilation failed' }
 Write-Output 'Link.exe compiled.'
+
+if (-not $Check -and -not $CompileOnly) {
+    if (-not $Python) {
+        $Python = if (Get-Command py.exe -ErrorAction SilentlyContinue) { 'py.exe' } elseif (Get-Command python.exe -ErrorAction SilentlyContinue) { 'python.exe' } else { throw 'Full client build requires Python 3.9+. Install Python or use -CompileOnly for source compilation.' }
+    }
+    [string[]]$pythonArgs = @(); if ([IO.Path]::GetFileName($Python) -eq 'py.exe') { $pythonArgs = @('-3') }
+    & $Python @pythonArgs -c 'import sys; sys.exit(0 if sys.version_info >= (3,9) else 1)'
+    if ($LASTEXITCODE -ne 0) { throw 'Full client build requires Python 3.9+.' }
+    & $Python @pythonArgs (Join-Path $project 'deploy\fetch_clients.py') (Join-Path $project 'artifacts\vendor') --platform windows --client-output $output
+    if ($LASTEXITCODE -ne 0) { throw 'Runtime download/verification failed. Check access to github.com and www.wintun.net; valid cached archives also work offline.' }
+    & (Join-Path $project 'deploy\build-uninstallers.ps1') -ClientOnly
+    foreach ($name in @('LICENSE','THIRD-PARTY-NOTICES.md')) { Copy-Item -LiteralPath (Join-Path $project $name) -Destination $output -Force }
+    Copy-Item -LiteralPath (Join-Path $project 'third_party') -Destination $output -Recurse -Force
+    Write-Output ('Complete Windows client: ' + $output)
+}
