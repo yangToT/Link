@@ -14,6 +14,9 @@ internal sealed partial class MainWindow {
    try{
     window.snapshot=Common.Map("registered",true,"wanted",true);window.backendReady=true;window.BackendUnavailable();
     if(!Common.Bool(window.snapshot,"registered")||window.backendReady||Convert.ToString(window.connection.Content)!="启动 / 重试")throw new Exception("Backend timeout erased the saved registration view");
+    window.snapshot=Common.Map("registered",true,"rejoinRequired",true,"server","https://203.0.113.10:24443");window.Render();
+    if(((TextBlock)window.body.Children[0]).Text!="重新加入网络"||window.server.Text!="https://203.0.113.10:24443")throw new Exception("Rejected identity has no rejoin entry");
+    window.RenderImage();File.Copy(Path.Combine(Common.Bin,"client-render.png"),Path.Combine(Common.Bin,"interaction-rejoin.png"),true);
     window.snapshot=Common.Map();
     var button=new FeedbackTestButton{Content="保存设置"};window.StyleButton(button);window.body.Children.Add(button);button.ApplyTemplate();
     Color normal=((SolidColorBrush)button.Background).Color;button.Press(true);

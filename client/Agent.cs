@@ -23,7 +23,7 @@ internal sealed class Agent : ServiceBase {
  readonly HashSet<string> localRules=new HashSet<string>();
  EventStream events;int eventGeneration;readonly StateOrder stateOrder=new StateOrder();
  bool shutdownRequested;Layer2 layer2;Dictionary<string,object> networkReport=Common.Map();
- Process network;ProcessJob job;bool wanted,stopping;string message="未连接";Timer timer;int ticking;DateTime lastGood=DateTime.MinValue;NamedPipeServerStream activePipe;
+ Process network;ProcessJob job;bool wanted,stopping,rejoinRequired;string message="未连接";Timer timer;int ticking;DateTime lastGood=DateTime.MinValue;NamedPipeServerStream activePipe;
  internal Agent(){ServiceName="LinkAgent";CanStop=true;AutoLog=false;}
  protected override void OnStart(string[] args){RequestAdditionalTime(120000);Common.ProtectFolder();CleanOwnedRules();job=new ProcessJob();config=Common.Load();layer2=new Layer2();try{if(Common.Bool(config,"layer2Enabled")||File.Exists(Path.Combine(Common.Home,"layer2-journal.json")))Components.ServicesRunning(true);}catch{}layer2.Recover();networkReport=NetworkDiscovery.Discover(Common.Text(config,"entryAdapterId"));wanted=Common.Bool(config,"autoConnect")&&!Common.Bool(config,"paused")&&Common.Text(config,"token")!="";Task.Run((Action)Serve);timer=new Timer(Tick,null,100,15000);}
  protected override void OnStop(){RequestAdditionalTime(120000);stopping=true;if(timer!=null)timer.Dispose();if(activePipe!=null)activePipe.Dispose();lock(gate)StopNetwork();if(job!=null)job.Dispose();}
@@ -40,10 +40,10 @@ internal sealed class Agent : ServiceBase {
   }
  }catch{if(!stopping)Thread.Sleep(200);}}}
  static string ReadBounded(TextReader reader){var b=new StringBuilder();int c;while((c=reader.Read())>=0&&c!='\n'){b.Append((char)c);if(b.Length>16384)throw new IOException();}return b.ToString();}
- static string NetworkError(WebException e){var r=e.Response as HttpWebResponse;if(r!=null&&(int)r.StatusCode==403)return "设备未获授权，请联系管理员";return "连接未完成，请检查服务端地址、加入码与网络";}
+ static string NetworkError(WebException e){var r=e.Response as HttpWebResponse;if(r!=null&&(int)r.StatusCode==403)return "设备未获授权；请管理员确认设备状态，删除后可使用新加入码重新加入";return "连接未完成，请检查服务端地址、加入码与网络";}
  Dictionary<string,object> Command(Dictionary<string,object> request){string action=Common.Text(request,"action");
   if(action=="component-diagnostics")return Common.Map("text",Components.Diagnostics(layer2.Status,Common.Bool(config,"layer2Enabled")));
-  if(action=="status")return Common.Map("message",message,"wanted",wanted,"registered",Common.Text(config,"token")!="","autoStart",Common.Bool(config,"autoStart"),"autoConnect",Common.Bool(config,"autoConnect"),"entryAdapterId",Common.Text(config,"entryAdapterId"),"network",Common.Obj(networkReport,"network"),"layer2",layer2.Status,"layer2Enabled",Common.Bool(config,"layer2Enabled"),"components",Components.Inspect(),"componentBusy",Common.Bool(config,"componentBusy"),"componentMessage",Common.Text(config,"componentMessage"),"state",snapshot,"version",Common.Version);
+  if(action=="status")return Common.Map("message",message,"wanted",wanted,"registered",Common.Text(config,"token")!="","rejoinRequired",rejoinRequired,"server",Common.Text(config,"server"),"autoStart",Common.Bool(config,"autoStart"),"autoConnect",Common.Bool(config,"autoConnect"),"entryAdapterId",Common.Text(config,"entryAdapterId"),"network",Common.Obj(networkReport,"network"),"layer2",layer2.Status,"layer2Enabled",Common.Bool(config,"layer2Enabled"),"components",Components.Inspect(),"componentBusy",Common.Bool(config,"componentBusy"),"componentMessage",Common.Text(config,"componentMessage"),"state",snapshot,"version",Common.Version);
   if(action=="layer2-enable"||action=="component-maintenance"){
    bool enable=action=="layer2-enable"&&Common.Bool(request,"enabled");
    if(enable&&Common.Bool(config,"componentBusy"))throw new InvalidOperationException("请先完成组件安装或修复");
@@ -53,19 +53,23 @@ internal sealed class Agent : ServiceBase {
    Task.Run(()=>Tick(null));return Common.Map("ok",true);
   }
   if(action=="enroll"){
-   if(Common.Text(config,"token")!="")throw new InvalidOperationException("本机已加入网络；更换实例前请卸载并清除本机身份");
+   bool replacing=Common.Text(config,"token")!="";
+   if(replacing&&!rejoinRequired)throw new InvalidOperationException("本机已加入网络；更换实例前请卸载并清除本机身份");
    string endpoint=Common.Text(request,"server").Trim().TrimEnd('/'),code=Common.Text(request,"code").Trim();Common.ValidateEndpoint(endpoint);
    string[] parts=code.Split('.');if(parts.Length!=3||parts[0]!="LINK1"||parts[1].Length!=64)throw new InvalidOperationException("加入码格式不正确");
    var pending=Common.Map("server",endpoint,"pin",parts[1],"token","");
    byte[] cert=Common.Request(endpoint+"/bootstrap/ca",parts[1],"",null);if(Common.Hash(Common.ReadCertificate(cert).RawData)!=parts[1])throw new InvalidOperationException("证书指纹不匹配");
    var enrolled=Common.Api(pending,"/agent/enroll",Common.Map("code",code,"name",Environment.MachineName,"os","Windows"));
-   pending["token"]=Common.Text(enrolled,"token");pending["deviceId"]=Common.Text(enrolled,"deviceId");pending["role"]=Common.Text(enrolled,"role");pending["autoStart"]=true;pending["autoConnect"]=true;pending["paused"]=false;
+   pending["token"]=Common.Text(enrolled,"token");pending["deviceId"]=Common.Text(enrolled,"deviceId");pending["role"]=Common.Text(enrolled,"role");pending["autoStart"]=replacing?Common.Bool(config,"autoStart"):true;pending["autoConnect"]=replacing?Common.Bool(config,"autoConnect"):true;pending["entryAdapterId"]=Common.Text(config,"entryAdapterId");pending["layer2Enabled"]=Common.Bool(config,"layer2Enabled");pending["paused"]=false;
    // Persist identity before starting networking so a startup failure cannot consume enrollment twice.
-   config=pending;Common.Save(config);File.WriteAllBytes(Path.Combine(Common.Home,"ca.pem"),cert);Common.Trust(cert,parts[1]);
+   Common.Save(pending);config=pending;rejoinRequired=false;File.WriteAllBytes(Path.Combine(Common.Home,"ca.pem"),cert);Common.Trust(cert,parts[1]);
    wanted=true;StartNetwork(Common.Text(enrolled,"setupKey"));EnsureEvents();message="正在连接";return Common.Map("ok",true);
   }
   if(action=="connect"){
-   if(Common.Text(config,"token")=="")throw new InvalidOperationException("请先加入网络");var reply=Common.Api(config,"/agent/reconnect",Common.Map());
+   if(Common.Text(config,"token")=="")throw new InvalidOperationException("请先加入网络");Dictionary<string,object> reply;
+   try{reply=Common.Api(config,"/agent/reconnect",Common.Map());}
+   catch(WebException error){var response=error.Response as HttpWebResponse;if(response!=null&&(int)response.StatusCode==403){rejoinRequired=true;Pause("设备身份已失效或被停用");}throw;}
+   rejoinRequired=false;
    StopNetwork();if(Common.Bool(config,"layer2Enabled"))Components.EnableCheck();config["paused"]=false;Common.Save(config);wanted=true;StartNetwork(Common.Text(reply,"setupKey"));EnsureEvents();message="正在连接";return Common.Map("ok",true);
   }
   if(action=="disconnect"||action=="shutdown"){
@@ -94,7 +98,7 @@ internal sealed class Agent : ServiceBase {
    local["mappingStates"]=states;local["applications"]=Applications();var reply=Common.Api(config,"/agent/heartbeat",local);
    lastGood=DateTime.UtcNow;ApplyState(reply);
 
-  }catch(WebException e){var response=e.Response as HttpWebResponse;if(response!=null&&(int)response.StatusCode==403){Pause("设备已停用");return;}message="连接中断，正在重试";if(DateTime.UtcNow-lastGood>TimeSpan.FromSeconds(35)){StopNetwork();snapshot=Common.Map();}}
+  }catch(WebException e){var response=e.Response as HttpWebResponse;if(response!=null&&(int)response.StatusCode==403){rejoinRequired=true;Pause("设备身份已失效或被停用");return;}message="连接中断，正在重试";if(DateTime.UtcNow-lastGood>TimeSpan.FromSeconds(35)){StopNetwork();snapshot=Common.Map();}}
    catch{message="网络配置未完成，请重试连接";if(DateTime.UtcNow-lastGood>TimeSpan.FromSeconds(35))StopNetwork();}
  }}finally{Interlocked.Exchange(ref ticking,0);}}
  void EnsureEvents(){if(events!=null||!wanted)return;int generation=++eventGeneration;events=new EventStream(config,reply=>{lock(gate){if(!stopping&&wanted&&generation==eventGeneration){try{ApplyState(reply);}catch{message="实时配置应用失败，等待重试";}}}},()=>{lock(gate){if(!stopping&&wanted&&generation==eventGeneration)Pause("设备连接已撤销，请手动重新连接");}});}

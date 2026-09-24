@@ -194,7 +194,7 @@ internal sealed partial class MainWindow : Window {
  Border Card(UIElement child){return new Border{Background=new SolidColorBrush(Color.FromArgb(135,255,255,255)),CornerRadius=new CornerRadius(9),BorderBrush=new SolidColorBrush(Color.FromArgb(90,255,255,255)),BorderThickness=new Thickness(1),Padding=new Thickness(17),Margin=new Thickness(0,0,0,10),Child=child};}
  void Render(){
   foreach(var item in pageButtons){bool selected=item.Key==activePage;item.Value.FontWeight=selected?FontWeights.SemiBold:FontWeights.Normal;item.Value.Foreground=selected?accent:ink;item.Value.BorderThickness=selected?new Thickness(3,1,1,1):new Thickness(1);}
-  body.Children.Clear();var state=Common.Obj(snapshot,"state")??Common.Map();var self=Common.Obj(state,"device");bool registered=Common.Bool(snapshot,"registered"),online=Common.Bool(self,"connected");
+  body.Children.Clear();var state=Common.Obj(snapshot,"state")??Common.Map();var self=Common.Obj(state,"device");bool registered=Common.Bool(snapshot,"registered"),rejoin=Common.Bool(snapshot,"rejoinRequired"),online=Common.Bool(self,"connected");
   status.Text=preview?"未连接":Common.Text(snapshot,"message","后台服务未安装");connection.Content=Common.Bool(snapshot,"wanted")?"断开":"连接";connection.IsEnabled=!busy&&!actionPending;management.IsEnabled=!actionPending&&online&&Common.Text(self,"role")=="admin";
   if(tray!=null){string tooltip="Link · "+status.Text;tray.Text=tooltip.Length>63?tooltip.Substring(0,63):tooltip;trayManagement.Enabled=management.IsEnabled;}
   string entryID=Common.Text(state,"entryId");if(self!=null&&entryID==Common.Text(self,"id")){body.Children.Add(Card(new TextBlock{Text="●  本机是网络入口",Foreground=accent,FontWeight=FontWeights.SemiBold}));}
@@ -214,10 +214,11 @@ internal sealed partial class MainWindow : Window {
    RenderUpdateSettings();body.Children.Add(new TextBlock{Text="最小化会收起到托盘；关闭时可选择是否停止后台。\n仅退出界面会保持连接；完全退出会先清理网络。\n主动断开或被踢下线后，需要手动连接。",Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,22,0,0)});return;
   }
   if(!preview&&!snapshot.ContainsKey("registered")){body.Children.Add(new TextBlock{Text="先启动后台，读取本机已保存的设备身份。",TextWrapping=TextWrapping.Wrap});body.Children.Add(AsyncButton("安装 / 启动后台",Connect));return;}
-  if(!registered){
-   body.Children.Add(new TextBlock{Text="加入一个网络",FontSize=17,Margin=new Thickness(0,0,0,4)});body.Children.Add(new TextBlock{Text="输入自托管实例的地址与一次性加入码。",Foreground=muted});body.Children.Add(Label("服务端地址"));
-   server.Padding=new Thickness(10);if(server.Text=="")server.Text="https://";body.Children.Add(server);body.Children.Add(Label("一次性加入码"));code.Padding=new Thickness(10);code.TextWrapping=TextWrapping.Wrap;code.MinHeight=62;body.Children.Add(code);
-   body.Children.Add(new TextBlock{Text="首次连接将安装后台组件与此实例的证书。",Foreground=muted,Margin=new Thickness(0,13,0,18),TextWrapping=TextWrapping.Wrap});body.Children.Add(AsyncButton("加入并连接",async()=>await Enroll()));return;
+  if(!registered||rejoin){
+   body.Children.Add(new TextBlock{Text=rejoin?"重新加入网络":"加入一个网络",FontSize=17,Margin=new Thickness(0,0,0,4)});
+   body.Children.Add(new TextBlock{Text=rejoin?"本机身份被服务端拒绝。若设备被停用，请管理员重新启用后点击“连接”；若已删除，请获取新加入码重新加入，新设备身份会在注册成功后保存。":"输入自托管实例的地址与一次性加入码。",Foreground=muted,TextWrapping=TextWrapping.Wrap});body.Children.Add(Label("服务端地址"));
+   server.Padding=new Thickness(10);if(server.Text==""||server.Text=="https://")server.Text=Common.Text(snapshot,"server","https://");body.Children.Add(server);body.Children.Add(Label("一次性加入码"));code.Padding=new Thickness(10);code.TextWrapping=TextWrapping.Wrap;code.MinHeight=62;body.Children.Add(code);
+   body.Children.Add(new TextBlock{Text=rejoin?"加入失败时保留当前本机身份和设置。":"首次连接将安装后台组件与此实例的证书。",Foreground=muted,Margin=new Thickness(0,13,0,18),TextWrapping=TextWrapping.Wrap});body.Children.Add(AsyncButton(rejoin?"使用新加入码加入":"加入并连接",async()=>await Enroll()));return;
   }
   if(activePage=="services"){
    body.Children.Add(new TextBlock{Text="本机服务",FontSize=17,Margin=new Thickness(0,0,0,16)});
@@ -280,7 +281,7 @@ internal sealed partial class MainWindow : Window {
   backendReady=true;if(!Common.Bool(snapshot,"registered")){Render();Feedback("本机尚未加入，请输入服务端地址和加入码。");return;}
   if(!disconnect&&Common.Bool(snapshot,"wanted")){Render();Feedback("已恢复原设备连接状态。");return;}await Execute(Common.Map("action",disconnect?"disconnect":"connect"));}
  async Task Enroll(){if(busy||preview)return;string endpoint=server.Text,credential=code.Text;if(credential.Trim()==""){Feedback("请输入一次性加入码",true);return;}busy=true;connection.IsEnabled=false;Feedback("正在准备后台服务…");
-  try{var current=await Task.Run(()=>Common.Pipe(Common.Map("action","status")));if(Common.Bool(current,"registered")){snapshot=current;Feedback("本机已经加入，已恢复原设备状态。");return;}await Task.Run(()=>Common.Pipe(Common.Map("action","enroll","server",endpoint,"code",credential)));code.Clear();Feedback("已加入，正在建立连接。");openOnConnect=true;}
+  try{var current=await Task.Run(()=>Common.Pipe(Common.Map("action","status")));if(Common.Bool(current,"registered")&&!Common.Bool(current,"rejoinRequired")){snapshot=current;Feedback("本机已经加入，已恢复原设备状态。");return;}await Task.Run(()=>Common.Pipe(Common.Map("action","enroll","server",endpoint,"code",credential)));code.Clear();Feedback("已加入，正在建立连接。");openOnConnect=true;}
   catch(Exception e){Feedback(e.Message,true);}finally{busy=false;}await Refresh();
  }
  async Task OpenManagement(){if(busy||preview)return;try{var reply=await Task.Run(()=>Common.Pipe(Common.Map("action","browser")));string url=Common.Text(reply,"url");Uri uri;if(!Uri.TryCreate(url,UriKind.Absolute,out uri)||uri.Scheme!="https")throw new InvalidOperationException("管理地址无效");Process.Start(new ProcessStartInfo(url){UseShellExecute=true});Feedback("已在浏览器中打开管理中心");}catch(Exception e){Feedback(e.Message,true);}}
