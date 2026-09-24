@@ -69,7 +69,8 @@ if($p.role -eq 'member' -and $p.action -ne 'pin'){
   if(((Get-DnsClientServerAddress -InterfaceIndex $virtual.ifIndex -AddressFamily IPv4).ServerAddresses -join ',') -ne ($localDns -join ',')){throw 'Cannot retain local DNS on Link adapter'}
   $unexpected=@(Get-NetRoute -InterfaceIndex $virtual.ifIndex | Where-Object {$_.Protocol -eq 'Dhcp' -and $_.NextHop -ne '0.0.0.0' -and $_.DestinationPrefix -notin $p.networks})
   if($unexpected.Count -gt 0){throw 'DHCP supplied an unexpected route'}
-  $address=Get-NetIPAddress -InterfaceIndex $virtual.ifIndex -AddressFamily IPv4 | Where-Object {$_.AddressState -eq 'Preferred' -and $_.PrefixOrigin -eq 'Dhcp' -and $_.IPAddress -notlike '169.254.*'} | Select-Object -First 1
+  # DHCP can briefly remove the address while the adapter and session remain healthy.
+  $address=Get-NetIPAddress -InterfaceIndex $virtual.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {$_.AddressState -eq 'Preferred' -and $_.PrefixOrigin -eq 'Dhcp' -and $_.IPAddress -notlike '169.254.*'} | Select-Object -First 1
   if($address){
    # These routes live only on the identity-checked, journalled Link adapter.
    # Never import a default route or overwrite another interface's route.

@@ -29,7 +29,8 @@ function Get-DnsClientServerAddress {param($InterfaceIndex,$AddressFamily)
 function Set-DnsClientServerAddress {param($InterfaceIndex,$ServerAddresses)
  if($InterfaceIndex -ne 11){throw 'Physical DNS modified'};$global:LinkGuardTestdns=@($ServerAddresses)
 }
-function Get-NetIPAddress {param($InterfaceIndex,$AddressFamily)
+function Get-NetIPAddress {param($InterfaceIndex,$AddressFamily,$ErrorAction)
+ if($global:LinkGuardTestaddressMissing){if($ErrorAction -ne 'SilentlyContinue'){throw 'CIM address temporarily missing'};return}
  [pscustomobject]@{IPAddress='10.20.0.10';AddressState='Preferred';PrefixOrigin='Dhcp'}
 }
 try {
@@ -69,6 +70,11 @@ $global:LinkGuardTestroutes=@();$p.action='pin';$global:LinkGuardTestintercept=$
  if(($global:LinkGuardTestdns -join ',') -ne '192.168.30.1'){throw 'Remote DHCP DNS accepted'}
  $global:LinkGuardTestroutes+=[pscustomobject]@{DestinationPrefix='0.0.0.0/0';InterfaceIndex=11;NextHop='10.20.0.1';Protocol='NetMgmt'}
  $null=Invoke-Guard;if(@($global:LinkGuardTestroutes | Where-Object {$_.InterfaceIndex -eq 11 -and $_.DestinationPrefix -eq '0.0.0.0/0'}).Count -gt 0 -or $global:LinkGuardTestroutes -notcontains $foreign){throw 'NetMgmt gateway suppression crossed ownership boundary'}
+ # A transient empty CIM address result is DHCP pending, not reason to destroy the NIC.
+ $global:LinkGuardTestaddressMissing=$true;$pending=Invoke-Guard | ConvertFrom-Json
+ if($pending.error -or $pending.waiting -or $global:LinkGuardTestroutes -notcontains $foreign){throw 'Missing DHCP address tore down or changed the transport'}
+ $global:LinkGuardTestaddressMissing=$false
+ if((Invoke-Guard | ConvertFrom-Json).error){throw 'Recovered DHCP address still fails'}
  # Missing or temporarily different best route is pending, not a destructive TUN failure.
  $global:LinkGuardTestlanOther=$true;$pending=Invoke-Guard | ConvertFrom-Json
  if($pending.waiting -ne 'lan-route' -or $pending.actualInterface -ne 6 -or $pending.expectedInterface -ne 11){throw 'Actual LAN route conflict evidence lost'}
@@ -78,11 +84,12 @@ $global:LinkGuardTestroutes=@();$p.action='pin';$global:LinkGuardTestintercept=$
  if((Invoke-Guard | ConvertFrom-Json).waiting){throw 'Restored LAN route remains pending'}
  if($global:LinkGuardTestroutes -notcontains $foreign){throw 'Route recovery changed another interface'}
  Write-Output 'PASS: LAN route transition is pending with actual interface evidence, then recovers'
+ Write-Output 'PASS: transient missing DHCP address keeps the owned adapter and recovers'
  Write-Output 'PASS: DHCP/NetMgmt default removed only on owned NIC; local DNS retained; foreign routes protected'
  Write-Output 'PASS: regulated NIC names, GUID ownership, missing adapter cleanup'
  Write-Output 'PASS: pin before adapter creation, TUN interception, ownership-only cleanup, failed-pin recovery, idempotent cleanup'
 } finally {
- Remove-Variable -Scope Global -Name LinkGuardTestnic,LinkGuardTestroutes,LinkGuardTestremoved,LinkGuardTestintercept,LinkGuardTestdns,LinkGuardTestlanOther,LinkGuardTestlanMissing -ErrorAction SilentlyContinue
+ Remove-Variable -Scope Global -Name LinkGuardTestnic,LinkGuardTestroutes,LinkGuardTestremoved,LinkGuardTestintercept,LinkGuardTestdns,LinkGuardTestlanOther,LinkGuardTestlanMissing,LinkGuardTestaddressMissing -ErrorAction SilentlyContinue
  # Only this test's generated temp directory is removed.
  if([IO.Path]::GetFullPath($testDir).StartsWith([IO.Path]::GetTempPath(),[StringComparison]::OrdinalIgnoreCase)){Remove-Item -LiteralPath $testDir -Recurse -Force}
 }
