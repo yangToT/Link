@@ -113,7 +113,7 @@ internal sealed class Agent : ServiceBase {
   if(!Common.Bool(config,"layer2Enabled")||Common.Bool(config,"componentBusy")){layer2.Stop();if(!Common.Bool(config,"componentBusy")&&Common.Text(layer2.Status,"state")!="cleanup-failed"&&!Common.Bool(Components.Inspect(),"foreign"))Components.ServicesRunning(false);return;}
   if(Common.Text(snapshot,"networkMode")=="bridged"){
    try{string waiting;var plan=Layer2Availability.Fetch(snapshot,()=>{layer2PlanRequests++;return Common.Api(config,"/agent/layer2",Common.Map());},out waiting);
-    if(plan==null){layer2.Stop();if(Common.Text(layer2.Status,"state")!="cleanup-failed")layer2.Status=Common.Map("state","waiting-entry","message",waiting,"ip","");return;}
+    if(plan==null){layer2.Stop();if(Common.Text(layer2.Status,"state")!="cleanup-failed")layer2.Status=Common.Map("state","waiting-network","message",waiting,"ip","");return;}
     if(Common.Bool(plan,"enabled"))layer2.Apply(plan,networkReport,Common.Text(config,"server"));else layer2.Stop();}
    catch(WebException error){var response=error.Response as HttpWebResponse;int code=response==null?0:(int)response.StatusCode;if(response!=null)response.Dispose();
     string detail=code==403?"设备身份或权限已失效":code==409?"入口未启用或不满足有线接入条件":code==425?"专用网络正在重连":code==503?"服务端局域网授权组件暂不可用":"局域网控制请求失败（"+(code==0?error.Status.ToString():"HTTP "+code)+"）";

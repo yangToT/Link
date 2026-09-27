@@ -6,7 +6,7 @@ using System.Linq;
 namespace Link {
 internal static class Layer2Tests {
  internal static void Run(){
-  foreach(var sample in new[]{new[]{"attached","已取得地址"},new[]{"entry-ready","入口已就绪"},new[]{"blocked","需处理"},new[]{"waiting-address","等待接入"}}){
+  foreach(var sample in new[]{new[]{"attached","已取得地址"},new[]{"entry-ready","入口已就绪"},new[]{"blocked","需处理"},new[]{"waiting-address","等待接入"},new[]{"waiting-network","等待接入"}}){
    var badgeDevice=Common.Map("connected",true,"layer2",Common.Map("enabled",true,"state",sample[0]));
    if(!MainWindow.LanBadge(badgeDevice).Contains(sample[1]))throw new Exception("LAN badge state mismatch");
    badgeDevice["connected"]=false;if(!MainWindow.LanBadge(badgeDevice).Contains("离线"))throw new Exception("Offline LAN state presented as live");

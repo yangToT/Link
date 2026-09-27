@@ -163,6 +163,7 @@ internal sealed partial class MainWindow {
   checkingUpdate=true;nextUpdateCheck=DateTime.UtcNow.AddHours(6);if(manual)Feedback("正在检查更新…");
   try{var release=await Task.Run(()=>Updates.Check());availableUpdate=release;if(release==null){if(manual)Feedback("当前已是此通道最新版本");updateBanner.Children.Clear();return;}
    string cached=Path.Combine(Updates.UserRoot,release.FileName);downloadedUpdate=File.Exists(cached)&&Common.Text(updatePreferences,"downloaded")==release.Version?cached:"";
+   if(manual)Feedback("发现新版本 "+release.Version+"，可选择下载更新。");
    if(manual||Updates.Due(updatePreferences,release.Version,DateTime.UtcNow)){ShowUpdate();if(!IsVisible&&tray!=null)tray.ShowBalloonTip(5000,"Link 有新版本",release.Version+" 已发布，打开 Link 选择更新时间。",System.Windows.Forms.ToolTipIcon.Info);}
   }catch{if(manual)Feedback("暂时无法检查更新，请稍后重试。可在 GitHub Releases 查看版本。",true);}finally{checkingUpdate=false;}
  }
