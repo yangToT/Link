@@ -17,7 +17,10 @@ internal sealed partial class MainWindow {
     window.snapshot=Common.Map("registered",true,"rejoinRequired",true,"server","https://203.0.113.10:24443");window.Render();
     if(((TextBlock)window.body.Children[0]).Text!="重新加入网络"||window.server.Text!="https://203.0.113.10:24443")throw new Exception("Rejected identity has no rejoin entry");
     window.RenderImage();File.Copy(Path.Combine(Common.Bin,"client-render.png"),Path.Combine(Common.Bin,"interaction-rejoin.png"),true);
-    window.snapshot=Common.Map();
+    window.snapshot=Common.Map();window.activePage="settings";window.Render();
+    if(window.desktopStart.Parent!=window.body||window.desktopStart==window.autoStart)throw new Exception("Desktop and background startup controls must be independent");
+    window.RenderImage();File.Copy(Path.Combine(Common.Bin,"client-render.png"),Path.Combine(Common.Bin,"interaction-settings.png"),true);
+    window.activePage="devices";window.Render();
     var button=new FeedbackTestButton{Content="保存设置"};window.StyleButton(button);window.body.Children.Add(button);button.ApplyTemplate();
     Color normal=((SolidColorBrush)button.Background).Color;button.Press(true);
     if(((SolidColorBrush)button.Background).Color==normal)throw new Exception("Pressed style is overridden by a local value");

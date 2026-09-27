@@ -22,7 +22,7 @@ internal sealed class Agent : ServiceBase {
  readonly HashSet<string> failedForwards=new HashSet<string>();
  readonly HashSet<string> localRules=new HashSet<string>();
  EventStream events;int eventGeneration;readonly StateOrder stateOrder=new StateOrder();
- bool shutdownRequested;Layer2 layer2;Dictionary<string,object> networkReport=Common.Map();
+ bool shutdownRequested;long layer2PlanRequests;Layer2 layer2;Dictionary<string,object> networkReport=Common.Map();
  Process network;ProcessJob job;bool wanted,stopping,rejoinRequired;string message="未连接";Timer timer;int ticking;DateTime lastGood=DateTime.MinValue;NamedPipeServerStream activePipe;
  internal Agent(){ServiceName="LinkAgent";CanStop=true;AutoLog=false;}
  protected override void OnStart(string[] args){RequestAdditionalTime(120000);Common.ProtectFolder();CleanOwnedRules();job=new ProcessJob();config=Common.Load();layer2=new Layer2();try{if(Common.Bool(config,"layer2Enabled")||File.Exists(Path.Combine(Common.Home,"layer2-journal.json")))Components.ServicesRunning(true);}catch{}layer2.Recover();networkReport=NetworkDiscovery.Discover(Common.Text(config,"entryAdapterId"));wanted=Common.Bool(config,"autoConnect")&&!Common.Bool(config,"paused")&&Common.Text(config,"token")!="";Task.Run((Action)Serve);timer=new Timer(Tick,null,100,15000);}
@@ -43,7 +43,7 @@ internal sealed class Agent : ServiceBase {
  static string NetworkError(WebException e){var r=e.Response as HttpWebResponse;if(r!=null&&(int)r.StatusCode==403)return "设备未获授权；请管理员确认设备状态，删除后可使用新加入码重新加入";return "连接未完成，请检查服务端地址、加入码与网络";}
  Dictionary<string,object> Command(Dictionary<string,object> request){string action=Common.Text(request,"action");
   if(action=="component-diagnostics")return Common.Map("text",Components.Diagnostics(layer2.Status,Common.Bool(config,"layer2Enabled")));
-  if(action=="status")return Common.Map("message",message,"wanted",wanted,"registered",Common.Text(config,"token")!="","rejoinRequired",rejoinRequired,"server",Common.Text(config,"server"),"autoStart",Common.Bool(config,"autoStart"),"autoConnect",Common.Bool(config,"autoConnect"),"entryAdapterId",Common.Text(config,"entryAdapterId"),"network",Common.Obj(networkReport,"network"),"layer2",layer2.Status,"layer2Enabled",Common.Bool(config,"layer2Enabled"),"components",Components.Inspect(),"componentBusy",Common.Bool(config,"componentBusy"),"componentMessage",Common.Text(config,"componentMessage"),"state",snapshot,"version",Common.Version);
+  if(action=="status")return Common.Map("message",message,"wanted",wanted,"registered",Common.Text(config,"token")!="","rejoinRequired",rejoinRequired,"server",Common.Text(config,"server"),"autoStart",Common.Bool(config,"autoStart"),"autoConnect",Common.Bool(config,"autoConnect"),"entryAdapterId",Common.Text(config,"entryAdapterId"),"network",Common.Obj(networkReport,"network"),"layer2",layer2.Status,"layer2Enabled",Common.Bool(config,"layer2Enabled"),"components",Components.Inspect(),"componentBusy",Common.Bool(config,"componentBusy"),"componentMessage",Common.Text(config,"componentMessage"),"state",snapshot,"version",Common.Version,"layer2PlanRequests",layer2PlanRequests);
   if(action=="layer2-enable"||action=="component-maintenance"){
    bool enable=action=="layer2-enable"&&Common.Bool(request,"enabled");
    if(enable&&Common.Bool(config,"componentBusy"))throw new InvalidOperationException("请先完成组件安装或修复");
@@ -112,7 +112,9 @@ internal sealed class Agent : ServiceBase {
  void RefreshLayer2(){
   if(!Common.Bool(config,"layer2Enabled")||Common.Bool(config,"componentBusy")){layer2.Stop();if(!Common.Bool(config,"componentBusy")&&Common.Text(layer2.Status,"state")!="cleanup-failed"&&!Common.Bool(Components.Inspect(),"foreign"))Components.ServicesRunning(false);return;}
   if(Common.Text(snapshot,"networkMode")=="bridged"){
-   try{var plan=Common.Api(config,"/agent/layer2",Common.Map());if(Common.Bool(plan,"enabled"))layer2.Apply(plan,networkReport,Common.Text(config,"server"));else layer2.Stop();}
+   try{string waiting;var plan=Layer2Availability.Fetch(snapshot,()=>{layer2PlanRequests++;return Common.Api(config,"/agent/layer2",Common.Map());},out waiting);
+    if(plan==null){layer2.Stop();if(Common.Text(layer2.Status,"state")!="cleanup-failed")layer2.Status=Common.Map("state","waiting-entry","message",waiting,"ip","");return;}
+    if(Common.Bool(plan,"enabled"))layer2.Apply(plan,networkReport,Common.Text(config,"server"));else layer2.Stop();}
    catch(WebException error){var response=error.Response as HttpWebResponse;int code=response==null?0:(int)response.StatusCode;if(response!=null)response.Dispose();
     string detail=code==403?"设备身份或权限已失效":code==409?"入口未启用或不满足有线接入条件":code==425?"专用网络正在重连":code==503?"服务端局域网授权组件暂不可用":"局域网控制请求失败（"+(code==0?error.Status.ToString():"HTTP "+code)+"）";
     if((code==0||code==425||code==429||code>=500)&&layer2.WaitForTransport(detail,Stopwatch.GetTimestamp()))return;

@@ -28,8 +28,24 @@ try {
  $script=$script.Replace("if(-not `$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Run as administrator'}",'')
  $runner=Join-Path $root 'uninstall.ps1';Set-Content $runner $script -Encoding UTF8
  $global:FixtureService=$true;$global:FixtureDisposed=$false;$global:FixtureStop=$false
- function Get-ItemProperty {param($LiteralPath,$ErrorAction) if($LiteralPath -like '*\Services\LinkAgent' -and $global:FixtureService){[pscustomobject]@{ImagePath='"'+(Join-Path $env:ProgramFiles 'Link\Link.exe')+'" --service'}}}
- function Remove-ItemProperty {param($LiteralPath,$Name,$ErrorAction)}
+ $startupRemoved=New-Object 'Collections.Generic.List[string]'
+ function Get-ChildItem {
+  if($args -contains 'Registry::HKEY_USERS'){foreach($profile in @('Owned','Foreign','Disabled')){[pscustomobject]@{PSPath=('Registry::HKEY_USERS\'+$profile)}}}
+  else{Microsoft.PowerShell.Management\Get-ChildItem @args}
+ }
+ function Get-ItemProperty {param($LiteralPath,$ErrorAction)
+  if($LiteralPath -like '*\Services\LinkAgent' -and $global:FixtureService){[pscustomobject]@{ImagePath='"'+(Join-Path $env:ProgramFiles 'Link\Link.exe')+'" --service'}}
+  elseif($LiteralPath -like 'Registry::HKEY_USERS\*\Run'){
+   if($LiteralPath -like '*\Owned\*'){[pscustomobject]@{'Link.ClientUI'='"'+(Join-Path $env:ProgramFiles 'Link\Link.exe')+'" --autostart'}}
+   elseif($LiteralPath -like '*\Foreign\*'){[pscustomobject]@{'Link.ClientUI'='foreign.exe'}}
+  }elseif($LiteralPath -like 'Registry::HKEY_USERS\*\Desktop'){[pscustomobject]@{StartupInitialized=(Join-Path $env:ProgramFiles 'Link\Link.exe')}}
+ }
+ function Remove-ItemProperty {param($LiteralPath,$Name,$ErrorAction)
+  if($LiteralPath -like 'Registry::HKEY_USERS\*'){
+   if($LiteralPath -like '*\Foreign\*'){throw 'Foreign startup modified'}
+   $startupRemoved.Add($LiteralPath+'|'+$Name)
+  }
+ }
  function Get-Service {param($Name,$ErrorAction)
   if($Name -eq 'LinkAgent' -and $global:FixtureService){$s=[pscustomobject]@{Status='Running'};$s|Add-Member ScriptMethod WaitForStatus {param($status,$time) if(-not $global:FixtureStop){throw 'Service not stopped'}};$s|Add-Member ScriptMethod Dispose {$global:FixtureDisposed=$true};$s}
  }
@@ -48,7 +64,7 @@ try {
  Set-Content (Join-Path $root 'foreign\Link.exe') 'unrelated executable'
  $plan=& $runner -Plan -SourceRoot $source | ConvertFrom-Json
  if($plan.portableFiles -notcontains (Join-Path $source 'Link.exe') -or $plan.portableFiles -notcontains (Join-Path $older 'Link.exe')){throw 'Portable executable missed'}
- $process.Refresh();if($process.HasExited -or $global:FixtureStop){throw 'Plan changed resources'}
+ $process.Refresh();if($process.HasExited -or $global:FixtureStop -or $startupRemoved.Count){throw 'Plan changed resources'}
  # Failed network recovery must stop before files or identity are deleted.
  Set-Content (Join-Path $data 'layer2-journal.json') '{}'
  function Start-Process {param($FilePath,$ArgumentList,$WindowStyle,[switch]$Wait,[switch]$PassThru)
@@ -74,6 +90,7 @@ try {
  if($output -notcontains 'LINK_COMPLETE|uninstall'){throw 'No verified completion'}
  if((Test-Path $program) -or (Test-Path $data) -or (Test-Path (Join-Path $source 'Link.exe')) -or (Test-Path (Join-Path $older 'Link.exe'))){throw 'Owned files remain'}
  if(-not (Test-Path (Join-Path $source 'keep-user-document.txt')) -or -not (Test-Path (Join-Path $root 'foreign\Link.exe'))){throw 'User or foreign files removed'}
+ if(-not ($startupRemoved | Where-Object {$_ -like '*\Owned\*|Link.ClientUI'}) -or -not ($startupRemoved | Where-Object {$_ -like '*\Disabled\*|StartupInitialized'})){throw 'Owned desktop startup not cleaned'}
  'PASS: real portable process exited; locked files cannot report success; retry removes owned files and identity; unrelated files retained'
 }finally {
  if($locked){$locked.Dispose()};if($process){if(-not $process.HasExited){$process.Kill();$process.WaitForExit()};$process.Dispose()}

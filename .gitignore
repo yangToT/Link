@@ -2,8 +2,10 @@
 SSH信息.txt
 SSH*.txt
 ssh*.txt
+ssh.env
 _local/
 artifacts/
+packages/
 .env
 .env.*
 !.env.example

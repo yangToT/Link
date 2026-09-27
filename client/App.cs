@@ -39,9 +39,10 @@ internal static class Program {
   if(args.Contains("--render")){var window=new MainWindow(true);window.RenderImage();return;}
   if(args.Contains("--render-components")){new MainWindow(true).RenderComponentsImage(false);new MainWindow(true).RenderComponentsImage(true);return;}
   if(args.Contains("--preview")){new Application().Run(new MainWindow(true));return;}
+  if(InstalledClient.Redirect(args))return;
   using(var restore=new System.Threading.EventWaitHandle(false,System.Threading.EventResetMode.AutoReset,"Local\\Link.Client.Restore")){
    bool first;using(var instance=new System.Threading.Mutex(true,"Local\\Link.Client.Window",out first)){
-    if(!first){restore.Set();return;}
+    if(!first){if(!args.Contains("--autostart"))restore.Set();return;}
     var app=new Application();var window=new MainWindow(false);
     var wait=System.Threading.ThreadPool.RegisterWaitForSingleObject(restore,(s,t)=>{if(!app.Dispatcher.HasShutdownStarted)app.Dispatcher.BeginInvoke((Action)window.RestoreWindow);},null,-1,false);
     app.SessionEnding+=(s,e)=>window.PrepareExit();
@@ -97,7 +98,7 @@ internal static class Program {
 }
 internal sealed partial class MainWindow : Window {
  readonly bool preview;readonly StackPanel body=new StackPanel();readonly TextBlock status=new TextBlock(),entry=new TextBlock(),feedback=new TextBlock();readonly Border entryBox=new Border();
- readonly Button connection=new Button(),management=new Button();readonly TextBox server=new TextBox(),code=new TextBox();readonly CheckBox autoStart=new CheckBox(),autoConnect=new CheckBox();
+ readonly Button connection=new Button(),management=new Button();readonly TextBox server=new TextBox(),code=new TextBox();readonly CheckBox autoStart=new CheckBox(),autoConnect=new CheckBox(),desktopStart=new CheckBox();bool startupChecked;
  Dictionary<string,object> snapshot=Common.Map();bool busy,openOnConnect,refreshing,actionPending,backendReady;string activePage="devices";DispatcherTimer timer;
  readonly ProgressBar actionProgress=new ProgressBar{Height=3,IsIndeterminate=true,Visibility=Visibility.Collapsed,Margin=new Thickness(0,3,0,5)};
  readonly StackPanel navigation=new StackPanel();readonly Dictionary<string,Button> pageButtons=new Dictionary<string,Button>();
@@ -204,6 +205,10 @@ internal sealed partial class MainWindow : Window {
   }
   if(activePage=="components"){RenderComponents();return;}
   if(activePage=="settings"){
+   body.Children.Add(new TextBlock{Text="界面启动",FontSize=17,Margin=new Thickness(0,0,0,8)});
+   desktopStart.Content="登录 Windows 后打开 Link 和托盘图标";desktopStart.IsChecked=!preview&&DesktopStartup.Enabled;desktopStart.Margin=new Thickness(0,8,0,12);body.Children.Add(desktopStart);
+   body.Children.Add(AsyncButton("保存界面启动设置",()=>{if(!preview){DesktopStartup.Save(desktopStart.IsChecked==true);startupChecked=true;}return Task.FromResult(true);}));
+   body.Children.Add(new TextBlock{Text="仅作用于当前 Windows 账户；后台可在登录前运行。若被系统禁用，请在 Windows 启动应用中启用 Link。",Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,8,0,18)});
    body.Children.Add(new TextBlock{Text="连接设置",FontSize=17,Margin=new Thickness(0,0,0,15)});
    autoStart.Content="开机启动后台连接";autoStart.IsChecked=Common.Bool(snapshot,"autoStart");autoStart.Margin=new Thickness(0,12,0,12);body.Children.Add(autoStart);
    autoConnect.Content="后台服务启动后自动连接";autoConnect.IsChecked=Common.Bool(snapshot,"autoConnect");autoConnect.Margin=new Thickness(0,12,0,12);body.Children.Add(autoConnect);
@@ -267,7 +272,8 @@ internal sealed partial class MainWindow : Window {
  async Task ManageCore(){if(busy||preview)return;busy=true;Feedback("正在安装基础组件，Windows 可能请求管理员权限…");try{await Task.Run(()=>Components.Elevate("--install-core"));Feedback("基础组件已更新");}catch(Exception e){Feedback(e.Message,true);}finally{busy=false;}await Refresh();}
  async Task ManageComponent(string action){if(busy||preview)return;busy=true;Feedback(action=="remove"?"正在恢复网络并卸载组件…":"正在准备组件，首次下载可能需要几分钟…");try{await Task.Run(()=>Components.Elevate("--components "+action));Feedback(action=="remove"?"组件已卸载":"组件已安装，局域网接入保持关闭");}catch(Exception e){Feedback(e.Message,true);}finally{busy=false;}await Refresh();}
  void BackendUnavailable(){backendReady=false;status.Text="暂时无法读取后台状态，正在重试";connection.Content="启动 / 重试";connection.IsEnabled=!actionPending;management.IsEnabled=false;}
- async Task Refresh(){if(busy||actionPending||refreshing||preview)return;refreshing=true;try{var next=await Task.Run(()=>Common.Pipe(Common.Map("action","status")));snapshot=next;backendReady=true;if(!actionPending&&activePage!="settings")Render();}catch{BackendUnavailable();}finally{refreshing=false;}if(openOnConnect&&management.IsEnabled){openOnConnect=false;await OpenManagement();}}
+ async Task Refresh(){if(busy||actionPending||refreshing||preview)return;refreshing=true;try{var next=await Task.Run(()=>Common.Pipe(Common.Map("action","status")));snapshot=next;backendReady=true;InitializeDesktopStartup();if(!actionPending&&activePage!="settings")Render();}catch{BackendUnavailable();}finally{refreshing=false;}if(openOnConnect&&management.IsEnabled){openOnConnect=false;await OpenManagement();}}
+ void InitializeDesktopStartup(){if(startupChecked||!Common.Bool(snapshot,"registered"))return;startupChecked=true;try{DesktopStartup.Initialize(Common.Bool(snapshot,"autoStart"));}catch(Exception error){Feedback("登录启动设置未完成："+error.Message,true);}}
  async Task Execute(Dictionary<string,object> request){if(busy||preview)return;busy=true;connection.IsEnabled=false;try{await Task.Run(()=>Common.Pipe(request));string action=Common.Text(request,"action");Feedback(action=="settings"?"设置已保存":action=="layer2-enable"?(Common.Bool(request,"enabled")?"局域网接入已开启，请查看连接状态":"局域网接入已停用"):action=="connect"?"连接请求已提交，正在建立连接":action=="disconnect"?"已断开连接":"操作已完成");}catch(Exception e){Feedback(e.Message,true);}finally{busy=false;}await Refresh();}
  async Task Connect(){
   if(busy)return;
@@ -311,7 +317,7 @@ internal static class SelfTest {
  }
  internal static void Run(){
   NetworkDiscovery.Test();
-  Layer2Tests.Run();UpdateTests.Run();
+  Layer2Tests.Run();Layer2Availability.Test();UpdateTests.Run();StartupTests.Run();InstalledClient.Test();
   EventStream.Test();
   Common.ValidateEndpoint("https://203.0.113.1:24443");bool rejected=false;try{Common.ValidateEndpoint("http://203.0.113.1");}catch{rejected=true;}if(!rejected)throw new Exception("plaintext accepted");
   if(Agent.Private(IPAddress.Parse("8.8.8.8"))||!Agent.Private(IPAddress.Parse("172.18.1.1")))throw new Exception("network classification");

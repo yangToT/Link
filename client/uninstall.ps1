@@ -204,6 +204,17 @@ if ($RemoveIdentity -and (Test-Path -LiteralPath $data)) {
         try { $store.Open('ReadWrite'); $store.Remove($cert) } finally { $store.Close() }
     }
 }
+# The UI registers in its own user's hive, which can differ from the elevated
+# uninstall account. Only remove exact commands in currently loaded profiles.
+$startupCommand='"'+(Join-Path $program 'Link.exe')+'" --autostart'
+foreach($profile in Get-ChildItem -LiteralPath 'Registry::HKEY_USERS'){
+    $runKey=$profile.PSPath+'\Software\Microsoft\Windows\CurrentVersion\Run'
+    $desktopKey=$profile.PSPath+'\Software\Link\Desktop'
+    $run=Get-ItemProperty -LiteralPath $runKey -ErrorAction SilentlyContinue
+    $desktop=Get-ItemProperty -LiteralPath $desktopKey -ErrorAction SilentlyContinue
+    if($run.'Link.ClientUI' -eq $startupCommand){Remove-ItemProperty -LiteralPath $runKey -Name 'Link.ClientUI'}
+    if(( -not $run.'Link.ClientUI' -or $run.'Link.ClientUI' -eq $startupCommand) -and $desktop.StartupInitialized -eq (Join-Path $program 'Link.exe')){Remove-ItemProperty -LiteralPath $desktopKey -Name 'StartupInitialized'}
+}
 foreach($file in $portableFiles){if(Test-Path -LiteralPath $file){Remove-Item -LiteralPath $file -Force}}
 if (Test-Path -LiteralPath $program) { Remove-Item -LiteralPath $program -Recurse -Force }
 $uninstallKey='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Link.Client'

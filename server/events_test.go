@@ -144,6 +144,44 @@ func TestEventSignatureAndFrozenState(t *testing.T) {
 		t.Fatal("expiry ignored")
 	}
 }
+func TestMemberReceivesEntryOnlineAndOffline(t *testing.T) {
+	a := testApp(t)
+	token := secret()
+	a.store.Data.NetworkMode = "bridged"
+	a.store.Data.EntryID = "entry"
+	a.store.Data.Devices = []Device{
+		{ID: "member", State: "active", TokenHash: digest(token), Connected: true, LastSeen: time.Now()},
+		{ID: "entry", State: "active", Connected: false, LastSeen: time.Now()},
+	}
+	server := httptest.NewServer(a.public())
+	defer server.Close()
+	r, _ := http.NewRequest("GET", server.URL+"/agent/events", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	response, err := server.Client().Do(r)
+	if err != nil { t.Fatal(err) }
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	check := func(online bool) {
+		t.Helper()
+		kind, state := nextEvent(t, reader)
+		if kind != "state" || state["entryId"] != "entry" { t.Fatal("missing entry state") }
+		for _, value := range state["devices"].([]any) {
+			d := value.(map[string]any)
+			if d["id"] == "entry" { if d["connected"] != online { t.Fatal("wrong entry connectivity") }; return }
+		}
+		t.Fatal("entry omitted")
+	}
+	check(false)
+	for _, online := range []bool{true, false, true} {
+		a.store.Lock()
+		a.store.Data.Devices[1].Connected = online
+		a.store.Data.Devices[1].LastSeen = time.Now()
+		err = a.store.persist()
+		a.store.Unlock()
+		if err != nil { t.Fatal(err) }
+		check(online)
+	}
+}
 func TestAdminStreamSessionAndShutdown(t *testing.T) {
 	a := testApp(t)
 	a.store.Data.Devices = []Device{{ID: "admin", Role: "admin", State: "active", IP: "127.0.0.1", Connected: true, LastSeen: time.Now()}}
