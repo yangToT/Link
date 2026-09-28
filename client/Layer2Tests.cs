@@ -69,7 +69,7 @@ internal static class Layer2Tests {
    int count=commands.Count;layer.Stop();if(commands.Count!=count)throw new Exception("Clean disconnect changed resources");
    File.WriteAllText(file,Common.Json(Common.Map("account","Link-ABCDEF012345","nic","LNKABCDEF012345","role","member","accountCreated",true)));
    layer=new Layer2(directory,()=>Common.Map(),cli,guard);count=commands.Count;
-   if(!layer.WaitForTransport("test",100)||!layer.WaitForTransport("test",100+29L*System.Diagnostics.Stopwatch.Frequency)||layer.WaitForTransport("test",100+31L*System.Diagnostics.Stopwatch.Frequency))throw new Exception("Transport grace is not bounded");
+   if(!layer.WaitForTransport("test",100)||!layer.WaitForTransport("test",100+74L*System.Diagnostics.Stopwatch.Frequency)||layer.WaitForTransport("test",100+76L*System.Diagnostics.Stopwatch.Frequency))throw new Exception("Transport grace is not bounded");
    if(commands.Count!=count||!File.Exists(file))throw new Exception("Transient route loss destroyed existing identity");
    layer.Stop();if(File.Exists(file))throw new Exception("Expired transport not cleaned up");
    File.WriteAllText(file,Common.Json(Common.Map("account","Link-ABCDEF012345","nic","VPN127","role","member")));

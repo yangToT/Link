@@ -298,10 +298,25 @@ func (a *App) revokeExpiredLayer2() {
 		return
 	}
 	entry := a.store.device(a.store.Data.EntryID)
-	entryOK := entry != nil && publicDevice(*entry).Connected && entry.Network.BridgeEligible && entry.Layer2.Enabled && entry.Layer2.Prepared
+	entryReady := entry != nil && entry.State == "active" && entry.Network.BridgeEligible && entry.Layer2.Enabled && entry.Layer2.Prepared
+	entryOnline := entryReady && publicDevice(*entry).Connected
+	if a.layer2OfflineSince == nil {
+		a.layer2OfflineSince = map[string]time.Time{}
+	}
 	for i := range a.store.Data.Devices {
 		d := &a.store.Data.Devices[i]
-		if !entryOK || !publicDevice(*d).Connected || !d.Layer2.Enabled || !d.Layer2.Prepared {
+		configured := entryReady && d.State == "active" && d.Layer2.Enabled && d.Layer2.Prepared
+		if configured && (!entryOnline || !publicDevice(*d).Connected) {
+			if a.layer2OfflineSince[d.ID].IsZero() {
+				a.layer2OfflineSince[d.ID] = time.Now()
+			}
+			if time.Since(a.layer2OfflineSince[d.ID]) < 75*time.Second {
+				continue
+			}
+		} else {
+			delete(a.layer2OfflineSince, d.ID)
+		}
+		if !configured || !entryOnline || !publicDevice(*d).Connected {
 			if e := a.cfg.Layer2.revoke(d, d.ID == a.store.Data.EntryID); e != nil {
 				d.Layer2.State = "blocked"
 				d.Layer2.Message = "二层撤销待重试"

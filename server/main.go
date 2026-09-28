@@ -48,6 +48,7 @@ type App struct {
 	tickets   map[string]Session
 	limitMu   sync.Mutex
 	limits    map[string][]time.Time
+	layer2OfflineSince map[string]time.Time
 }
 
 func newApp(cfg Config, s *Store, ca []byte) *App {
@@ -59,7 +60,7 @@ func newApp(cfg Config, s *Store, ca []byte) *App {
 	}
 	events := newEventHub()
 	s.onChange = events.notify
-	return &App{events: events, cfg: cfg, store: s, backend: &Backend{URL: cfg.BackendURL, Token: cfg.BackendToken}, ca: ca, pin: pin, sessions: map[string]Session{}, tickets: map[string]Session{}, limits: map[string][]time.Time{}}
+	return &App{events: events, cfg: cfg, store: s, backend: &Backend{URL: cfg.BackendURL, Token: cfg.BackendToken}, ca: ca, pin: pin, sessions: map[string]Session{}, tickets: map[string]Session{}, limits: map[string][]time.Time{}, layer2OfflineSince: map[string]time.Time{}}
 }
 func main() {
 	dir := flag.String("data", "./data", "instance directory")

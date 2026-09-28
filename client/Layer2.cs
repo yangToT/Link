@@ -21,8 +21,8 @@ internal sealed class Layer2 {
  Dictionary<string,object> owned;string signature="";long transportWaiting=-1;
  internal bool WaitForTransport(string message,long now){
   if(transportWaiting<0)transportWaiting=now;
-  if(now-transportWaiting>30L*Stopwatch.Frequency)return false;
-  Status=Common.Map("state","waiting-network","message",message+"；等待网络恢复（最多 30 秒）","ip","");return true;
+  if(now-transportWaiting>75L*Stopwatch.Frequency)return false;
+  Status=Common.Map("state","waiting-network","message",message+"；等待网络恢复（最多 75 秒）","ip","");return true;
  }
  internal void RecordFailure(string message){try{File.WriteAllText(Path.Combine(Path.GetDirectoryName(journal),"layer2-last-error.json"),Common.Json(Common.Map("time",DateTime.UtcNow.ToString("o"),"message",message)));}catch(IOException){}catch(UnauthorizedAccessException){}}
  internal Dictionary<string,object> Status=Common.Map("state","off","message","未启用局域网接入","ip","");

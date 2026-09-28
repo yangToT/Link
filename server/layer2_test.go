@@ -225,3 +225,36 @@ func TestLayer2OptOutRevokesOnlyDependants(t *testing.T) {
 		t.Fatal("entry opt-out left dependant authorization", revoked)
 	}
 }
+
+func TestLayer2TransientPeerLossGrace(t *testing.T) {
+	a := testApp(t)
+	var revoked []string
+	a.cfg.Layer2 = testLayer2(t, func(method string, p map[string]any) any {
+		if method == "SetUser" && p["policy:Access_bool"] == false {
+			revoked = append(revoked, p["Name_str"].(string))
+		}
+		return map[string]any{}
+	})
+	a.store.Data.NetworkMode = "bridged"
+	a.store.Data.EntryID = "entry"
+	for _, id := range []string{"entry", "member"} {
+		a.store.Data.Devices = append(a.store.Data.Devices, Device{ID: id, State: "active", Connected: true, LastSeen: time.Now(), Network: NetworkReport{BridgeEligible: true}, Layer2: Layer2Status{Enabled: true, Prepared: true}})
+	}
+	a.store.Data.Devices[0].Connected = false
+	a.revokeExpiredLayer2()
+	if len(revoked) != 0 || len(a.layer2OfflineSince) != 2 {
+		t.Fatal("brief entry loss revoked active sessions", revoked)
+	}
+	a.store.Data.Devices[0].Connected = true
+	a.revokeExpiredLayer2()
+	if len(a.layer2OfflineSince) != 0 {
+		t.Fatal("recovered entry retained offline timer")
+	}
+	a.store.Data.Devices[1].Connected = false
+	a.revokeExpiredLayer2()
+	a.layer2OfflineSince["member"] = time.Now().Add(-76 * time.Second)
+	a.revokeExpiredLayer2()
+	if strings.Join(revoked, ",") != layer2User("member") {
+		t.Fatal("sustained member loss did not revoke only member", revoked)
+	}
+}
