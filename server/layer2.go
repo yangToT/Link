@@ -307,6 +307,7 @@ func (a *App) revokeExpiredLayer2() {
 		d := &a.store.Data.Devices[i]
 		configured := entryReady && d.State == "active" && d.Layer2.Enabled && d.Layer2.Prepared
 		if configured && (!entryOnline || !publicDevice(*d).Connected) {
+			// A brief overlay status loss is not an administrator revocation.
 			if a.layer2OfflineSince[d.ID].IsZero() {
 				a.layer2OfflineSince[d.ID] = time.Now()
 			}
