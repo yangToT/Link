@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -12,6 +13,7 @@ internal sealed partial class MainWindow {
   var app=new Application();var window=new MainWindow(true);
   window.Loaded+=async(sender,args)=>{
    try{
+    window.TestRemoteDesktop();
     window.snapshot=Common.Map("registered",true,"wanted",true);window.backendReady=true;window.BackendUnavailable();
     if(!Common.Bool(window.snapshot,"registered")||window.backendReady||Convert.ToString(window.connection.Content)!="启动 / 重试")throw new Exception("Backend timeout erased the saved registration view");
     window.snapshot=Common.Map("registered",true,"rejoinRequired",true,"server","https://203.0.113.10:24443");window.Render();
@@ -50,6 +52,21 @@ internal sealed partial class MainWindow {
    finally{window.PrepareExit();window.Close();}
   };
   app.Run(window);
+ }
+ void TestRemoteDesktop(){
+  var local=Common.Map("state","attached","ip","192.168.20.10","message","已取得局域网地址");
+  var peer=Common.Map("id","peer","name","测试设备","connected",true,"ip","100.88.0.11","layer2",Common.Map("enabled",true,"state","attached","ip","192.168.20.11"));
+  var self=Common.Map("id","self","name","本机","connected",true,"ip","100.88.0.10");
+  var state=Common.Map("networkMode","bridged","device",self,"devices",new[]{self,peer});
+  snapshot=Common.Map("registered",true,"state",state,"layer2Enabled",true,"layer2",local);
+  foreach(string expected in new[]{"192.168.20.11","100.88.0.11",""}){
+   if(expected=="100.88.0.11")local["state"]="waiting-address";
+   if(expected=="")peer["connected"]=false;
+   Render();
+   var buttons=body.Children.OfType<Border>().Select(b=>b.Child).OfType<DockPanel>().SelectMany(p=>p.Children.OfType<Button>()).ToArray();
+   if(buttons.Length!=1||buttons[0].IsEnabled!=(expected!="")||Convert.ToString(buttons[0].ToolTip)!=(expected==""?"等待设备连接和地址就绪":"远程地址："+expected))throw new Exception("RDP button address or availability mismatch");
+   if(expected=="192.168.20.11"){RenderImage();File.Copy(Path.Combine(Common.Bin,"client-render.png"),Path.Combine(Common.Bin,"interaction-remote-desktop.png"),true);}
+  }
  }
 }
 }

@@ -235,7 +235,7 @@ internal sealed partial class MainWindow : Window {
   body.Children.Add(new TextBlock{Text="设备",FontSize=17,Margin=new Thickness(0,0,0,15)});
   foreach(var d in Common.Items(state,"devices")){
    var row=new DockPanel();bool isSelf=Common.Text(d,"id")==Common.Text(self,"id");string ip=Common.Text(d,"ip");
-   if(!isSelf){var remote=Button("远程桌面",()=>{IPAddress parsed;if(!IPAddress.TryParse(ip,out parsed))throw new InvalidOperationException("设备地址尚未就绪");Process.Start("mstsc.exe","/v:"+ip);Feedback("已启动远程桌面");});remote.IsEnabled=Common.Bool(d,"connected");DockPanel.SetDock(remote,Dock.Right);row.Children.Add(remote);}
+   if(!isSelf){string remoteIp=RemoteDesktop.Address(snapshot,d);var remote=Button("远程桌面",()=>{if(remoteIp=="")throw new InvalidOperationException("设备地址尚未就绪");Process.Start("mstsc.exe","/v:"+remoteIp);Feedback("已启动远程桌面 · "+remoteIp);});remote.IsEnabled=remoteIp!="";remote.ToolTip=remoteIp==""?"等待设备连接和地址就绪":"远程地址："+remoteIp;DockPanel.SetDock(remote,Dock.Right);row.Children.Add(remote);}
    var text=new StackPanel();text.Children.Add(new TextBlock{Text=Common.Text(d,"name")+(isSelf?"  ·  本机":""),FontWeight=FontWeights.SemiBold});text.Children.Add(new TextBlock{Text=(Common.Bool(d,"connected")?"● 在线":"○ 离线")+"    "+ip+(Common.Text(d,"id")==entryID?"    网络入口":""),Foreground=muted,Margin=new Thickness(0,8,0,0),TextWrapping=TextWrapping.Wrap});text.Children.Add(new TextBlock{Text=LanBadge(d),Foreground=Common.Bool(Common.Obj(d,"layer2"),"enabled")?accent:muted,Margin=new Thickness(0,7,0,0),TextWrapping=TextWrapping.Wrap});row.Children.Add(text);body.Children.Add(Card(row));
   }
   if(!online)body.Children.Add(Label("设备列表将在网络连接成功后更新。"));
@@ -317,7 +317,7 @@ internal static class SelfTest {
  }
  internal static void Run(){
   NetworkDiscovery.Test();
-  Layer2Tests.Run();Layer2Availability.Test();UpdateTests.Run();StartupTests.Run();InstalledClient.Test();
+  Layer2Tests.Run();Layer2Availability.Test();RemoteDesktopTests.Run();UpdateTests.Run();StartupTests.Run();InstalledClient.Test();
   EventStream.Test();
   Common.ValidateEndpoint("https://203.0.113.1:24443");bool rejected=false;try{Common.ValidateEndpoint("http://203.0.113.1");}catch{rejected=true;}if(!rejected)throw new Exception("plaintext accepted");
   if(Agent.Private(IPAddress.Parse("8.8.8.8"))||!Agent.Private(IPAddress.Parse("172.18.1.1")))throw new Exception("network classification");
