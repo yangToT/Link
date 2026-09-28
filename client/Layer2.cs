@@ -35,14 +35,26 @@ internal sealed class Layer2 {
   throw new InvalidOperationException("没有可用的虚拟网卡名称，请保留现有网卡并检查组件");
  }
  internal void CreateNic(Dictionary<string,object> cfg){
+  string mac=Common.Text(owned,"mac");
+  if(mac!=""&&!Regex.IsMatch(mac,@"^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$"))throw new InvalidOperationException("虚拟网卡 MAC 配置无效");
   Cli(cfg,false,"NicPrepare "+Atom(Common.Text(owned,"nic")));
   owned["nicPending"]=true;Save();
   try{Cli(cfg,false,"NicCreate "+Atom(Common.Text(owned,"nic")));}
   catch(InvalidOperationException e){var failure=e.InnerException as CommandFailure;if(failure!=null&&(failure.ExitCode==30||failure.ExitCode==32)){owned["nicPending"]=false;Save();}throw;}
   // Only a successful create can claim an adapter. An interrupted create is retained for review.
   Guard("identify");owned["nicCreated"]=true;owned["nicPending"]=false;Save();
+  if(mac!=""){Cli(cfg,false,"NicSetSetting "+Atom(Common.Text(owned,"nic"))+" /MAC:"+mac);Guard("mac-ready");}
  }
  internal static string Atom(string s){if(!Regex.IsMatch(s??"","^[A-Za-z0-9_-]{1,80}$"))throw new InvalidOperationException("二层组件参数无效");return s;}
+ internal static string StableMac(string username){
+  byte[] hash;using(var sha=SHA256.Create())hash=sha.ComputeHash(Encoding.UTF8.GetBytes(Atom(username)));
+  hash[0]=(byte)((hash[0]&0xfc)|0x02); // Locally administered unicast address.
+  return string.Join(":",hash.Take(6).Select(b=>b.ToString("X2")).ToArray());
+ }
+ internal static string PlanSignature(Dictionary<string,object> plan,Dictionary<string,object> network){
+  var relevant=Common.Map("role",Common.Text(plan,"role"),"endpoint",Common.Text(plan,"endpoint"),"hub",Common.Text(plan,"hub"),"username",Common.Text(plan,"username"),"password",Common.Text(plan,"password"),"certificate",Common.Text(plan,"certificate"),"gateway",Common.Text(plan,"gateway"),"networks",Strings(plan,"networks").OrderBy(n=>n,StringComparer.Ordinal).ToArray(),"adapterId",Common.Text(network,"adapterId"),"localGateway",Common.Text(network,"gateway"));
+  return Common.Hash(Encoding.UTF8.GetBytes(Common.Json(relevant)));
+ }
  internal static string BridgeDevice(string description,string adapterID,string listing){
   Guid guid;if(!Guid.TryParse(adapterID,out guid))throw new InvalidOperationException("物理网卡标识无效");
   // SoftEther Stable BridgeWin32.c: SHA-1 of uppercase brace-form GUID, first 32 bits big endian.
@@ -106,14 +118,14 @@ internal sealed class Layer2 {
  internal void Apply(Dictionary<string,object> plan,Dictionary<string,object> local,string publicServer){
   try{
    ValidatePlan(plan,local);var network=Common.Obj(local,"network");string role=Common.Text(plan,"role");
-   string next=Common.Hash(Encoding.UTF8.GetBytes(Common.Json(plan)+Common.Text(network,"adapterId")+Common.Text(network,"gateway")));
+   string next=PlanSignature(plan,network);
    if(signature!=next){
     var cfg=loadConfig();bool entry=role=="entry";
     if(owned==null||Common.Text(owned,"planSignature")!=next){
     Stop();if(owned!=null)throw new InvalidOperationException("上次网络清理未完成，请先恢复");
     Cli(cfg,entry,entry?"CascadeList":"AccountList");
     string id=Guid.NewGuid().ToString("N").Substring(0,12).ToUpperInvariant();
-    owned=Common.Map("account","Link-"+id,"nic",entry?"LNK"+id:AvailableNic(Cli(cfg,false,"NicList"),NetworkInterface.GetAllNetworkInterfaces().Select(a=>a.Description)),"role",role,"adapterId",Common.Text(network,"adapterId"),"adapterName",Common.Text(network,"adapterName"),"publicServer",new Uri(publicServer).Host,"gateway",Common.Text(network,"gateway"),"overlayEndpoint",new Uri("https://"+Common.Text(plan,"endpoint")).Host,"remoteGateway",Common.Text(plan,"gateway"),"networks",Strings(plan,"networks").ToArray(),"nicCreated",false,"accountCreated",false,"bridgeCreated",false);
+    owned=Common.Map("account","Link-"+id,"nic",entry?"LNK"+id:AvailableNic(Cli(cfg,false,"NicList"),NetworkInterface.GetAllNetworkInterfaces().Select(a=>a.Description)),"mac",entry?"":StableMac(Common.Text(plan,"username")),"role",role,"adapterId",Common.Text(network,"adapterId"),"adapterName",Common.Text(network,"adapterName"),"publicServer",new Uri(publicServer).Host,"gateway",Common.Text(network,"gateway"),"overlayEndpoint",new Uri("https://"+Common.Text(plan,"endpoint")).Host,"remoteGateway",Common.Text(plan,"gateway"),"networks",Strings(plan,"networks").ToArray(),"nicCreated",false,"accountCreated",false,"bridgeCreated",false);
     owned["planSignature"]=next;Save();
     }
     Guard("pin");

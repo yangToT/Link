@@ -53,10 +53,11 @@ $global:LinkGuardTestroutes=@();$p.action='pin';$global:LinkGuardTestintercept=$
  try {$null=Invoke-Guard} catch {$rejected=$true}
  if(-not $rejected -or -not (Test-Path (Join-Path $testDir 'layer2-route-owner.json'))){throw 'Interception or recovery record not detected'}
  $p.action='cleanup';$null=Invoke-Guard;if($global:LinkGuardTestroutes.Count -ne 0){throw 'Failed pin left route behind'}
- $global:LinkGuardTestnic=[pscustomobject]@{InterfaceGuid=[guid]'33333333-3333-3333-3333-333333333333';InterfaceDescription='VPN Client Adapter - VPN127';ifIndex=11;Name='Ethernet 3'}
+ $global:LinkGuardTestnic=[pscustomobject]@{InterfaceGuid=[guid]'33333333-3333-3333-3333-333333333333';InterfaceDescription='VPN Client Adapter - VPN127';MacAddress='02-AC-01-23-45-67';ifIndex=11;Name='Ethernet 3'}
  $p.nic='VPN127';$p.action='identify';$identity=Invoke-Guard | ConvertFrom-Json
  if($identity.nicId -ne '33333333-3333-3333-3333-333333333333'){throw 'NIC identity not recorded'}
- $p.nicId=$identity.nicId;$p.action='verify-nic';if(-not (Invoke-Guard | ConvertFrom-Json).nicPresent){throw 'Owned adapter rejected'}
+ $p.nicId=$identity.nicId;$p.mac='02:AC:01:23:45:67';$p.action='mac-ready';if(-not (Invoke-Guard | ConvertFrom-Json).macReady){throw 'Stable adapter MAC not verified'}
+ $p.action='verify-nic';if(-not (Invoke-Guard | ConvertFrom-Json).nicPresent){throw 'Owned adapter rejected'}
  $p.nicId='44444444-4444-4444-4444-444444444444';$rejected=$false;try{$null=Invoke-Guard}catch{$rejected=$true};if(-not $rejected){throw 'Foreign replacement adapter accepted'}
  foreach($name in @('VPN1','VPN0','VPN128','VPN999')){$p.nic=$name;$rejected=$false;try{$null=Invoke-Guard}catch{$rejected=$true};if(-not $rejected){throw 'Unregulated adapter name accepted'}}
  $p.nic='VPN127';$global:LinkGuardTestnic=$null;if((Invoke-Guard | ConvertFrom-Json).nicPresent){throw 'Missing adapter not idempotent'}

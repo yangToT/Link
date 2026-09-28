@@ -3,6 +3,20 @@ $ErrorActionPreference='Stop'
 try {
 $p=Get-Content -LiteralPath $Request -Raw -Encoding UTF8 | ConvertFrom-Json
 if($p.account -notmatch '^Link-[A-F0-9]{12}$' -or $p.nic -notmatch '^(LNK[A-F0-9]{12}|VPN|VPN([2-9]|[1-9][0-9]|1[01][0-9]|12[0-7]))$'){throw 'Invalid resource ownership'}
+if($p.action -eq 'mac-ready'){
+ if($p.role -ne 'member' -or $p.mac -notmatch '^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$' -or -not $p.nicId){throw 'Stable virtual adapter MAC request invalid'}
+ $expected=$p.mac.Replace(':','')
+ for($attempt=0;$attempt -lt 32;$attempt++){
+  $virtual=@(Get-NetAdapter -IncludeHidden | Where-Object {$_.InterfaceDescription -eq ('VPN Client Adapter - '+$p.nic)})
+  if($virtual.Count -gt 1){throw 'Ambiguous virtual adapter ownership'}
+  if($virtual.Count -eq 1){
+   if($virtual[0].InterfaceGuid.ToString().Trim('{}') -ne $p.nicId.Trim('{}')){throw 'Virtual adapter ownership changed'}
+   if($virtual[0].MacAddress -and $virtual[0].MacAddress.Replace('-','').Replace(':','') -eq $expected){@{macReady=$true} | ConvertTo-Json -Compress;exit}
+  }
+  Start-Sleep -Milliseconds 250
+ }
+ throw 'Stable virtual adapter MAC was not applied'
+}
 if($p.action -in @('identify','verify-nic')){
  $virtual=@(Get-NetAdapter -IncludeHidden | Where-Object {$_.InterfaceDescription -eq ('VPN Client Adapter - '+$p.nic)})
  if($virtual.Count -gt 1){throw 'Ambiguous virtual adapter ownership'}

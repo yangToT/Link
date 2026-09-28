@@ -14,6 +14,8 @@ internal static class Layer2Tests {
   if(!MainWindow.LanBadge(Common.Map("connected",true,"layer2",Common.Map("prepared",true,"enabled",false))).Contains("未开启"))throw new Exception("Installed components presented as enabled");
   if(Layer2.AvailableNic("Name|VPN127\nName|VPN125",new[]{"VPN Client Adapter - VPN126"})!="VPN124")throw new Exception("Occupied NIC name selected");
   if(Layer2.AvailableNic(string.Join(" ",Enumerable.Range(2,126).Select(n=>"VPN"+n)),new string[0])!="VPN")throw new Exception("Regulated base name invalid");
+  string mac=Layer2.StableMac("link-device-one");
+  if(mac!=Layer2.StableMac("link-device-one")||mac==Layer2.StableMac("link-device-two")||mac.Split(':').Length!=6||(Convert.ToByte(mac.Substring(0,2),16)&3)!=2)throw new Exception("Stable member MAC invalid");
   string expected="Test Ethernet (ID=2814777680)";
   if(Layer2.BridgeDevice("Test Ethernet","{11111111-1111-1111-1111-111111111111}","Device Name|"+expected+"\r\n")!=expected)throw new Exception("SoftEther adapter ID mismatch");
   bool refused=false;try{Layer2.BridgeDevice("Test Ethernet","{22222222-2222-2222-2222-222222222222}",expected);}catch(InvalidOperationException){refused=true;}if(!refused)throw new Exception("Wrong physical adapter accepted");
@@ -23,6 +25,13 @@ internal static class Layer2Tests {
   Reject(plan,local,"重叠");plan["role"]="entry";Reject(plan,local,"有线");
   plan["endpoint"]="192.0.2.1:24448";Reject(plan,local,"专用网络");
   plan["endpoint"]="100.88.0.1:24448";plan["username"]="name\r\nAccountDelete foreign";Reject(plan,local,"参数无效");
+  var signaturePlan=Common.Map("role","member","endpoint","100.88.0.1:24448","hub","LINK","username","link-device-one","password","secret","certificate","certificate","gateway","192.168.20.1","networks",new[]{"192.168.20.0/24","192.168.21.0/24"},"entryIp","192.168.20.10");
+  var signatureNetwork=Common.Map("adapterId","physical","gateway","192.168.30.1");
+  string signature=Layer2.PlanSignature(signaturePlan,signatureNetwork);
+  signaturePlan["entryIp"]="192.168.20.11";signaturePlan["networks"]=new[]{"192.168.21.0/24","192.168.20.0/24"};
+  if(signature!=Layer2.PlanSignature(signaturePlan,signatureNetwork))throw new Exception("Irrelevant entry address changed member transport");
+  signaturePlan["gateway"]="192.168.20.2";
+  if(signature==Layer2.PlanSignature(signaturePlan,signatureNetwork))throw new Exception("Remote gateway change did not renew transport");
   string directory=Path.Combine(Path.GetTempPath(),"Link-Layer2-Test-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
   try{
    string file=Path.Combine(directory,"layer2-journal.json");
@@ -32,6 +41,19 @@ internal static class Layer2Tests {
    if(string.Join(",",setup.Select(s=>s.Split(' ')[0]))!="AccountCreate,AccountPasswordSet,AccountServerCertSet,AccountServerCertEnable,AccountDetailSet,AccountConnect")throw new Exception("Member authentication/certificate ordering changed");
    var accepted=new[]{"MAXTCP","INTERVAL","TTL","HALF","BRIDGE","MONITOR","NOTRACK","NOQOS"};
    if(setup[4].Split(' ').Skip(2).Any(s=>!accepted.Contains(s.Split(':')[0].TrimStart('/'))))throw new Exception("Unsupported Stable AccountDetailSet parameter");
+   File.WriteAllText(file,Common.Json(Common.Map("account","Link-ABCDEF012345","nic","VPN127","mac",mac,"role","member")));
+   var nicCommands=new List<string>();
+   var macLayer=new Layer2(directory,()=>Common.Map(),(c,e,t,x)=>{nicCommands.Add(t);return "";},p=>Common.Text(p,"action")=="identify"?"{\"nicId\":\"61398fd5-fcc1-49f5-8022-b9fae7c10301\"}":"{}");
+   macLayer.CreateNic(Common.Map());
+   if(!Common.Bool(Common.Parse(File.ReadAllText(file)),"nicCreated")||nicCommands.Count!=3||!nicCommands[2].Equals("NicSetSetting VPN127 /MAC:"+mac))throw new Exception("Stable MAC not applied before member connection");
+   File.Delete(file);
+   File.WriteAllText(file,Common.Json(Common.Map("account","Link-ABCDEF012345","nic","VPN127","mac",mac,"role","member")));
+   nicCommands.Clear();
+   macLayer=new Layer2(directory,()=>Common.Map(),(c,e,t,x)=>{nicCommands.Add(t);if(t.StartsWith("NicSetSetting "))throw new CommandFailure(1);return "";},p=>Common.Text(p,"action")=="identify"?"{\"nicId\":\"61398fd5-fcc1-49f5-8022-b9fae7c10301\"}":Common.Text(p,"action")=="verify-nic"?"{\"nicPresent\":true}":"{}");
+   bool macFailed=false;try{macLayer.CreateNic(Common.Map());}catch(InvalidOperationException){macFailed=true;}
+   if(!macFailed)throw new Exception("Failed MAC configuration accepted");
+   macLayer.Stop();
+   if(File.Exists(file)||!nicCommands.Any(c=>c.StartsWith("NicDelete ")))throw new Exception("MAC setup failure left an owned adapter behind");
    File.WriteAllText(file,Common.Json(Common.Map("account","Link-ABCDEF012345","nic","LNKABCDEF012345","role","member","accountCreated",true,"nicCreated",true,"bridgeCreated",false)));
    var commands=new List<string>();bool fail=true;
    Func<Dictionary<string,object>,bool,string,bool,string> cli=(cfg,entry,text,cleanup)=>{if(!cleanup||entry)throw new Exception("Invalid cleanup context");commands.Add(text);if(fail&&text.StartsWith("NicDelete"))throw new IOException("Synthetic driver busy");return "";};
