@@ -45,11 +45,11 @@ internal static class Layer2Tests {
    var nicCommands=new List<string>();
    var macLayer=new Layer2(directory,()=>Common.Map(),(c,e,t,x)=>{nicCommands.Add(t);return "";},p=>Common.Text(p,"action")=="identify"?"{\"nicId\":\"61398fd5-fcc1-49f5-8022-b9fae7c10301\"}":"{}");
    macLayer.CreateNic(Common.Map());
-   if(!Common.Bool(Common.Parse(File.ReadAllText(file)),"nicCreated")||nicCommands.Count!=3||!nicCommands[2].Equals("NicSetSetting VPN127 /MAC:"+mac))throw new Exception("Stable MAC not applied before member connection");
+   if(!Common.Bool(Common.Parse(File.ReadAllText(file)),"nicCreated")||!Common.Bool(Common.Parse(File.ReadAllText(file)),"nicCreateSucceeded")||nicCommands.Count!=3||!nicCommands[2].Equals("NicSetSetting VPN127 /MAC:"+mac))throw new Exception("Stable MAC or durable installer success missing before member connection");
    File.Delete(file);
    File.WriteAllText(file,Common.Json(Common.Map("account","Link-ABCDEF012345","nic","VPN127","mac",mac,"role","member")));
    nicCommands.Clear();
-   macLayer=new Layer2(directory,()=>Common.Map(),(c,e,t,x)=>{nicCommands.Add(t);if(t.StartsWith("NicSetSetting "))throw new CommandFailure(1);return "";},p=>Common.Text(p,"action")=="identify"?"{\"nicId\":\"61398fd5-fcc1-49f5-8022-b9fae7c10301\"}":Common.Text(p,"action")=="verify-nic"?"{\"nicPresent\":true}":"{}");
+   macLayer=new Layer2(directory,()=>Common.Map(),(c,e,t,x)=>{nicCommands.Add(t);if(t.StartsWith("NicSetSetting "))throw new CommandFailure(1);return "";},p=>Common.Text(p,"action")=="identify"?"{\"nicId\":\"61398fd5-fcc1-49f5-8022-b9fae7c10301\"}":Common.Text(p,"action")=="verify-nic"?Common.Json(Common.Map("nicPresent",!nicCommands.Contains("NicDelete VPN127"))):"{}");
    bool macFailed=false;try{macLayer.CreateNic(Common.Map());}catch(InvalidOperationException){macFailed=true;}
    if(!macFailed)throw new Exception("Failed MAC configuration accepted");
    macLayer.Stop();
@@ -88,6 +88,40 @@ internal static class Layer2Tests {
     if(File.Exists(file)!=(code==31))throw new Exception("Ambiguous NIC outcome recovery incorrect");
     if(File.Exists(file))File.Delete(file);
    }
+   // Pending creation must be reconcilable without deleting a name-only, unowned adapter.
+   foreach(bool present in new[]{false,true}){
+    File.WriteAllText(file,Common.Json(Common.Map("account","Link-ABCDEF012345","nic","VPN127","role","member","nicPending",true,"nicCreateSucceeded",true)));
+    var called=new List<string>();
+    layer=new Layer2(directory,()=>Common.Map(),(c,e,t,x)=>{called.Add(t);return "";},p=>{
+     string action=Common.Text(p,"action");
+     if(action=="resolve-nic")return Common.Json(Common.Map("nicPresent",present,"nicId",present?"61398fd5-fcc1-49f5-8022-b9fae7c10301":""));
+     if(action=="verify-nic")return Common.Json(Common.Map("nicPresent",!called.Contains("NicDelete VPN127")));return "{}";
+    });
+    layer.Recover();
+    if(File.Exists(file)||Common.Text(layer.Status,"state")!="off"||called.Contains("NicDelete VPN127")!=present)throw new Exception("Pending NIC reconciliation did not complete safely");
+   }
+   File.WriteAllText(file,Common.Json(Common.Map("account","Link-ABCDEF012345","nic","VPN127","role","member","nicPending",true)));
+   layer=new Layer2(directory,()=>Common.Map(),(c,e,t,x)=>{throw new Exception("Unowned NIC mutation");},p=>Common.Text(p,"action")=="resolve-nic"?"{\"error\":\"Ownership requires review\"}":"{}");
+   layer.Recover();layer.Recover();
+   if(!File.Exists(file)||!Common.Bool(Common.Parse(File.ReadAllText(file)),"nicPending")||Common.Text(layer.Status,"state")!="cleanup-failed")throw new Exception("Unproven creation lost its recovery journal");
+   layer=new Layer2(directory,()=>Common.Map(),(c,e,t,x)=>{throw new Exception("Unresolved NIC mutation");},p=>"{}");layer.Recover();
+   if(!File.Exists(file))throw new Exception("Incomplete reconciliation output discarded journal");
+   File.WriteAllText(file,Common.Json(Common.Map("account","Link-ABCDEF012345","nic","VPN127","role","member","nicCreated",true,"nicId","61398fd5-fcc1-49f5-8022-b9fae7c10301")));
+   layer=new Layer2(directory,()=>Common.Map(),(c,e,t,x)=>"",p=>Common.Text(p,"action")=="verify-nic"?"{\"nicPresent\":true}":"{}");layer.Recover();
+   if(!File.Exists(file)||!Common.Bool(Common.Parse(File.ReadAllText(file)),"nicCreated"))throw new Exception("Reported deletion success hid a residual adapter");
+   // Cleanup failure may block removal, but must not veto voluntary background shutdown.
+   foreach(bool stopFails in new[]{false,true}){
+    bool requested=false,stopped=false,remembered=false;
+    var reply=Agent.FinishDisconnect(Common.Map("state","cleanup-failed","message","test pending recovery"),true,()=>{stopped=true;if(stopFails)throw new IOException();},()=>requested=true,warning=>{remembered=warning.Contains("pending recovery");});
+    if(!requested||!stopped||!remembered||!Common.Bool(reply,"ok")||Common.Text(reply,"warning")=="")throw new Exception("Cleanup failure prevented requested shutdown");
+   }
+   bool ordinaryStopped=false,ordinaryShutdown=false;
+   Agent.FinishDisconnect(Common.Map("state","cleanup-failed","message","test pending recovery"),false,()=>ordinaryStopped=true,()=>ordinaryShutdown=true,w=>{});
+   if(ordinaryStopped||ordinaryShutdown)throw new Exception("Ordinary disconnect lost background recovery");
+   bool saveShutdown=false;
+   Agent.FinishDisconnect(Common.Map("state","cleanup-failed","message","test"),true,()=>{},()=>saveShutdown=true,w=>{throw new IOException();});
+   if(!saveShutdown)throw new Exception("Warning persistence failure vetoed shutdown");
+   Console.WriteLine("PASS: pending NIC reconciliation, unowned NIC retention, and voluntary shutdown despite cleanup/service/save failures");
   }finally{Directory.Delete(directory,true);}
  }
  static void Reject(Dictionary<string,object> plan,Dictionary<string,object> local,string expected){try{Layer2.ValidatePlan(plan,local);}catch(InvalidOperationException e){if(e.Message.Contains(expected))return;throw;}throw new Exception("Unsafe plan accepted");}

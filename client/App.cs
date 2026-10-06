@@ -148,7 +148,7 @@ internal sealed partial class MainWindow : Window {
   if(choice==1)HideToTray();else if(choice==2){PrepareExit();Close();}else if(choice==3)await ExitCompletely();
  }
  async Task ExitCompletely(){
-  if(busy||actionPending)return;busy=true;RestoreWindow();Feedback("正在断开连接、清理网络并停止后台…");
+  if(busy||actionPending)return;busy=true;RestoreWindow();Feedback("正在断开连接并停止后台；未完成的网络恢复记录将保留…");
   try{
    await Task.Run(()=>{
     var service=ServiceController.GetServices().FirstOrDefault(s=>s.ServiceName=="LinkAgent");
@@ -266,7 +266,7 @@ internal sealed partial class MainWindow : Window {
   }
   actions.Children.Add(AsyncButton("复制诊断",async()=>{try{var reply=await Task.Run(()=>Common.Pipe(Common.Map("action","component-diagnostics")));Clipboard.SetText(Common.Text(reply,"text"));Feedback("已复制组件诊断（已省略凭据与地址）");}catch(Exception error){Feedback(error.Message,true);}}));
   optional.Children.Add(actions);string note=Common.Text(snapshot,"componentMessage");if(note!="")optional.Children.Add(new TextBlock{Text=note,Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,12,0,0)});
-  if(enabled)optional.Children.Add(new TextBlock{Text=Common.Text(Common.Obj(snapshot,"layer2"),"message","等待管理端启用局域网接入"),Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,12,0,0)});
+  if(enabled||Common.Text(Common.Obj(snapshot,"layer2"),"state")=="cleanup-failed")optional.Children.Add(new TextBlock{Text=Common.Text(Common.Obj(snapshot,"layer2"),"message","等待管理端启用局域网接入"),Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,12,0,0)});
   optional.Children.Add(new TextBlock{Text="包含 SoftEther Client 与 Bridge，Link 根据设备角色使用。停用先恢复网络；卸载只移除本功能组件。入口设备停用后，依赖它的局域网访问会中断。",FontSize=11,Foreground=muted,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,16,0,0)});body.Children.Add(Card(optional));
  }
  async Task ManageCore(){if(busy||preview)return;busy=true;Feedback("正在安装基础组件，Windows 可能请求管理员权限…");try{await Task.Run(()=>Components.Elevate("--install-core"));Feedback("基础组件已更新");}catch(Exception e){Feedback(e.Message,true);}finally{busy=false;}await Refresh();}

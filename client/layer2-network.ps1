@@ -17,9 +17,26 @@ if($p.action -eq 'mac-ready'){
  }
  throw 'Stable virtual adapter MAC was not applied'
 }
-if($p.action -in @('identify','verify-nic')){
+if($p.action -in @('identify','verify-nic','resolve-nic')){
+ if($p.action -eq 'resolve-nic' -and @(Get-CimInstance Win32_Process -Filter "Name='driver_installer.exe'").Count -gt 0){throw 'Driver installer still running; retain recovery record'}
+ # A successful installation can precede visibility in the network CIM provider.
+ $attempts=if($p.action -eq 'identify'){32}else{1}
+ for($attempt=0;$attempt -lt $attempts;$attempt++){
  $virtual=@(Get-NetAdapter -IncludeHidden | Where-Object {$_.InterfaceDescription -eq ('VPN Client Adapter - '+$p.nic)})
  if($virtual.Count -gt 1){throw 'Ambiguous virtual adapter ownership'}
+  if($virtual.Count -eq 1 -or $attempt -eq $attempts-1){break}
+  Start-Sleep -Milliseconds 250
+ }
+ if($p.action -eq 'resolve-nic'){
+  if($virtual.Count -eq 0){
+   $devices=@(Get-CimInstance Win32_PnPEntity | Where-Object {$_.Name -eq ('VPN Client Adapter - '+$p.nic) -or $_.HardwareID -contains ('NeoAdapter_'+$p.nic)})
+   if($devices.Count -gt 0){throw 'Adapter still present in PnP; retain recovery record'}
+   @{nicPresent=$false} | ConvertTo-Json -Compress;exit
+  }
+  if($p.nicId){if($virtual[0].InterfaceGuid.ToString().Trim('{}') -ne $p.nicId.Trim('{}')){throw 'Adapter identity changed; refusing to claim another adapter'}}
+  elseif(-not $p.nicCreateSucceeded){throw 'Adapter ownership requires administrator review; retain recovery record'}
+  @{nicId=$virtual[0].InterfaceGuid.ToString();nicPresent=$true} | ConvertTo-Json -Compress;exit
+ }
  if($p.action -eq 'identify'){
   if($virtual.Count -ne 1){throw 'Created adapter identity unavailable; retain recovery record'}
   @{nicId=$virtual[0].InterfaceGuid.ToString()} | ConvertTo-Json -Compress;exit

@@ -77,10 +77,7 @@ internal sealed class Agent : ServiceBase {
    // Report voluntary departure before stopping the overlay; offline servers must not prevent local cleanup.
    try{if(Common.Text(config,"token")!="")Common.Api(config,"/agent/disconnect",Common.Map());}catch{}
    Pause("已断开");
-   if(Common.Text(layer2.Status,"state")=="cleanup-failed")throw new InvalidOperationException(Common.Text(layer2.Status,"message"));
-   if(!Common.Bool(Components.Inspect(),"foreign"))Components.ServicesRunning(false);
-   if(action=="shutdown")shutdownRequested=true;
-   return Common.Map("ok",true);
+   return FinishDisconnect(layer2.Status,action=="shutdown",()=>{if(!Common.Bool(Components.Inspect(),"foreign"))Components.ServicesRunning(false);},()=>shutdownRequested=true,warning=>{config["componentMessage"]=warning;Common.Save(config);});
   }
   if(action=="settings"){
    string adapter=Common.Text(request,"entryAdapterId");if(adapter!=""&&!NetworkDiscovery.Read().Any(n=>n.Physical&&n.ID==adapter))throw new InvalidOperationException("请选择本机物理网卡");
@@ -89,6 +86,14 @@ internal sealed class Agent : ServiceBase {
   }
   if(action=="browser"){var reply=Common.Api(config,"/agent/browser-ticket",Common.Map());return reply;}
   throw new InvalidOperationException("不支持的操作");
+ }
+ internal static Dictionary<string,object> FinishDisconnect(Dictionary<string,object> lan,bool shutdown,Action stopComponents,Action requestShutdown,Action<string> rememberWarning){
+  string warning=Common.Text(lan,"state")=="cleanup-failed"?Common.Text(lan,"message"):"";
+  // A recovery record is not permission to keep a voluntarily stopped connection running.
+  if(shutdown||warning=="")try{stopComponents();}catch{warning+=(warning==""?"":"；")+"局域网组件服务未能停止，请在下次启动时检查";}
+  if(warning!="")try{rememberWarning(warning);}catch{warning+="；恢复提示未能保存";}
+  if(shutdown)requestShutdown();
+  return Common.Map("ok",true,"warning",warning);
  }
  void Pause(string reason){wanted=false;config["paused"]=true;Common.Save(config);StopNetwork();snapshot=Common.Map();message=reason;}
  void Tick(object state){if(Interlocked.Exchange(ref ticking,1)==1)return;try{lock(gate){if(stopping)return;if(!wanted){layer2.Recover();return;}

@@ -4,6 +4,10 @@ $testDir=Join-Path ([IO.Path]::GetTempPath()) ('Link-Guard-Test-'+[guid]::NewGui
 New-Item -ItemType Directory -Path $testDir | Out-Null
 $global:LinkGuardTestnic=$null;
 $global:LinkGuardTestroutes=@();$global:LinkGuardTestremoved=@();$global:LinkGuardTestintercept=$false
+function Get-CimInstance {param($ClassName,$Filter)
+ if($ClassName -eq 'Win32_Process' -and $global:LinkGuardTestinstaller){[pscustomobject]@{Name='driver_installer.exe'}}
+ if($ClassName -eq 'Win32_PnPEntity' -and $global:LinkGuardTestpnp){[pscustomobject]@{Name='VPN Client Adapter - VPN127'}}
+}
 function Get-NetAdapter { param([switch]$IncludeHidden)
  if($global:LinkGuardTestnic){$global:LinkGuardTestnic}
  [pscustomobject]@{InterfaceGuid=[guid]'11111111-1111-1111-1111-111111111111';ifIndex=6;HardwareInterface=$true;Status='Up';PhysicalMediaType='802.3';Name='Ethernet'}
@@ -57,10 +61,18 @@ $global:LinkGuardTestroutes=@();$p.action='pin';$global:LinkGuardTestintercept=$
  $p.nic='VPN127';$p.action='identify';$identity=Invoke-Guard | ConvertFrom-Json
  if($identity.nicId -ne '33333333-3333-3333-3333-333333333333'){throw 'NIC identity not recorded'}
  $p.nicId=$identity.nicId;$p.mac='02:AC:01:23:45:67';$p.action='mac-ready';if(-not (Invoke-Guard | ConvertFrom-Json).macReady){throw 'Stable adapter MAC not verified'}
+ $p.action='resolve-nic';if(-not (Invoke-Guard | ConvertFrom-Json).nicPresent){throw 'Journalled identity not reconciled'}
+ $p.Remove('nicId');$rejected=$false;try{$null=Invoke-Guard}catch{$rejected=$true};if(-not $rejected){throw 'Name-only pending adapter claimed'}
+ $p.nicCreateSucceeded=$true;if((Invoke-Guard | ConvertFrom-Json).nicId -ne $identity.nicId){throw 'Successful pending creation not reconciled'}
+ $global:LinkGuardTestinstaller=$true;$rejected=$false;try{$null=Invoke-Guard}catch{$rejected=$true};if(-not $rejected){throw 'Running installer raced with cleanup'};$global:LinkGuardTestinstaller=$false
+ $p.nicId='44444444-4444-4444-4444-444444444444';$rejected=$false;try{$null=Invoke-Guard}catch{$rejected=$true};if(-not $rejected){throw 'Recovery claimed replacement GUID'}
+ $p.nicId=$identity.nicId
  $p.action='verify-nic';if(-not (Invoke-Guard | ConvertFrom-Json).nicPresent){throw 'Owned adapter rejected'}
  $p.nicId='44444444-4444-4444-4444-444444444444';$rejected=$false;try{$null=Invoke-Guard}catch{$rejected=$true};if(-not $rejected){throw 'Foreign replacement adapter accepted'}
  foreach($name in @('VPN1','VPN0','VPN128','VPN999')){$p.nic=$name;$rejected=$false;try{$null=Invoke-Guard}catch{$rejected=$true};if(-not $rejected){throw 'Unregulated adapter name accepted'}}
  $p.nic='VPN127';$global:LinkGuardTestnic=$null;if((Invoke-Guard | ConvertFrom-Json).nicPresent){throw 'Missing adapter not idempotent'}
+ $p.action='resolve-nic';$global:LinkGuardTestpnp=$true;$rejected=$false;try{$null=Invoke-Guard}catch{$rejected=$true};if(-not $rejected){throw 'CIM-invisible PnP adapter lost recovery record'};$global:LinkGuardTestpnp=$false
+ if((Invoke-Guard | ConvertFrom-Json).nicPresent){throw 'Absent pending NIC did not reconcile'}
  $global:LinkGuardTestintercept=$false;$global:LinkGuardTestdns=@('10.20.0.1')
  $global:LinkGuardTestnic=[pscustomobject]@{InterfaceGuid=[guid]'33333333-3333-3333-3333-333333333333';InterfaceDescription='VPN Client Adapter - VPN127';ifIndex=11;Name='Ethernet 3'}
  $p.nicId='33333333-3333-3333-3333-333333333333';$p.action='check';$p.networks=@('10.20.0.0/24');$p.remoteGateway='10.20.0.1'
@@ -88,9 +100,10 @@ $global:LinkGuardTestroutes=@();$p.action='pin';$global:LinkGuardTestintercept=$
  Write-Output 'PASS: transient missing DHCP address keeps the owned adapter and recovers'
  Write-Output 'PASS: DHCP/NetMgmt default removed only on owned NIC; local DNS retained; foreign routes protected'
  Write-Output 'PASS: regulated NIC names, GUID ownership, missing adapter cleanup'
+ Write-Output 'PASS: pending NIC reconciliation requires ownership; installer/PnP races and replacement GUID are rejected'
  Write-Output 'PASS: pin before adapter creation, TUN interception, ownership-only cleanup, failed-pin recovery, idempotent cleanup'
 } finally {
- Remove-Variable -Scope Global -Name LinkGuardTestnic,LinkGuardTestroutes,LinkGuardTestremoved,LinkGuardTestintercept,LinkGuardTestdns,LinkGuardTestlanOther,LinkGuardTestlanMissing,LinkGuardTestaddressMissing -ErrorAction SilentlyContinue
+ Remove-Variable -Scope Global -Name LinkGuardTestnic,LinkGuardTestroutes,LinkGuardTestremoved,LinkGuardTestintercept,LinkGuardTestdns,LinkGuardTestlanOther,LinkGuardTestlanMissing,LinkGuardTestaddressMissing,LinkGuardTestinstaller,LinkGuardTestpnp -ErrorAction SilentlyContinue
  # Only this test's generated temp directory is removed.
  if([IO.Path]::GetFullPath($testDir).StartsWith([IO.Path]::GetTempPath(),[StringComparison]::OrdinalIgnoreCase)){Remove-Item -LiteralPath $testDir -Recurse -Force}
 }
